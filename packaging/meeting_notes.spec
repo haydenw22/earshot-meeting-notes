@@ -23,6 +23,10 @@ for pkg in ("livekit", "pyaudiowpatch", "soundfile", "soxr"):
 
 hiddenimports += ["scipy.signal", "scipy.signal._sigtools", "PySide6.QtSvg"]
 
+# Ship the .ico as a data file too, so the running app can load it as the
+# (crisp, multi-size) window/taskbar icon — not just the exe's embedded icon.
+datas += [(os.path.join(ROOT, "packaging", "earshot.ico"), ".")]
+
 a = Analysis(
     [os.path.join(ROOT, "main.py")],
     pathex=[ROOT],
