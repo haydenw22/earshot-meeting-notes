@@ -21,7 +21,7 @@ for pkg in ("livekit", "pyaudiowpatch", "soundfile", "soxr"):
     binaries += b
     hiddenimports += h
 
-hiddenimports += ["scipy.signal", "scipy.signal._sigtools", "PySide6.QtSvg"]
+hiddenimports += ["scipy.signal", "scipy.signal._sigtools", "PySide6.QtSvg", "mss", "PIL", "PIL.Image"]
 
 # Ship the .ico as a data file too, so the running app can load it as the
 # (crisp, multi-size) window/taskbar icon — not just the exe's embedded icon.

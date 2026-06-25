@@ -7,11 +7,14 @@ import html as _html
 import json
 import os
 import re as _re
+from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -23,6 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..capture import screen as screen_capture
+
 from ..storage.repository import Meeting
 from .widgets import Card, status_chip
 from .workers import FuncWorker
@@ -32,6 +37,18 @@ def _md_to_html(text: str) -> str:
     """Escape, then render **bold** as <b> for QLabel rich text."""
     esc = _html.escape(text or "")
     return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
+
+
+class _ClickableImage(QLabel):
+    def __init__(self, on_click):
+        super().__init__()
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._on_click()
+        super().mouseReleaseEvent(event)
 
 
 class DetailPage(QWidget):
@@ -90,8 +107,19 @@ class DetailPage(QWidget):
         self.notes_lay.addStretch(1)
         self.notes_scroll.setWidget(self.notes_host)
         self.transcript_view = QTextBrowser()
+        # Screen tab — captured screenshots (hidden when there are none)
+        self.screen_scroll = QScrollArea()
+        self.screen_scroll.setWidgetResizable(True)
+        self.screen_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.screen_host = QWidget()
+        self.screen_grid = QGridLayout(self.screen_host)
+        self.screen_grid.setContentsMargins(16, 16, 16, 16)
+        self.screen_grid.setSpacing(12)
+        self.screen_scroll.setWidget(self.screen_host)
+
         self.tabs.addTab(self.notes_scroll, "Notes")
         self.tabs.addTab(self.transcript_view, "Transcript")
+        self._screen_tab_index = self.tabs.addTab(self.screen_scroll, "Screen")
         cl.addWidget(self.tabs)
         root.addWidget(card, 1)
 
@@ -101,10 +129,13 @@ class DetailPage(QWidget):
 
         btns = QHBoxLayout()
         btns.setSpacing(10)
+        self.copy_btn = self._action("Copy summary", self._copy_summary)
+        self.copy_btn.setProperty("variant", "primary")
         self.resummarise_btn = self._action("Re-summarise", self._resummarise)
         self.reprocess_btn = self._action("Re-transcribe", self._reprocess)
         self.folder_btn = self._action("Open audio folder", self._open_folder)
         self.delete_btn = self._action("Delete", self._delete)
+        btns.addWidget(self.copy_btn)
         btns.addWidget(self.resummarise_btn)
         btns.addWidget(self.reprocess_btn)
         btns.addWidget(self.folder_btn)
@@ -147,6 +178,8 @@ class DetailPage(QWidget):
 
         self._render_notes(m)
         self.transcript_view.setPlainText(m.transcript or "No transcript yet.")
+        self._render_screenshots(m)
+        self.copy_btn.setEnabled(bool(m.notes))
         self.resummarise_btn.setEnabled(bool(m.transcript))
         self.reprocess_btn.setEnabled(bool(m.audio_dir))
         self.folder_btn.setEnabled(bool(m.audio_dir))
@@ -308,8 +341,45 @@ class DetailPage(QWidget):
             notes["action_items"] = actions
             self.repo.update(self.meeting_id, notes_json=json.dumps(notes))
 
+    # ---------- screenshots ----------
+    def _render_screenshots(self, m) -> None:
+        while self.screen_grid.count():
+            item = self.screen_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        shots = screen_capture.list_screenshots(Path(m.audio_dir)) if m.audio_dir else []
+        self.tabs.setTabVisible(self._screen_tab_index, bool(shots))
+        per_row = 3
+        for i, (ms, path) in enumerate(shots):
+            self.screen_grid.addWidget(self._thumb(ms, path), i // per_row, i % per_row)
+
+    def _thumb(self, ms: int, path: Path) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        img = _ClickableImage(lambda p=path: os.startfile(str(p)))  # noqa: S606
+        pm = QPixmap(str(path))
+        if not pm.isNull():
+            img.setPixmap(pm.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation))
+        img.setStyleSheet(f"border:1px solid {self.theme.color('border')}; border-radius:8px;")
+        cap = QLabel(self._fmt_ms(ms))
+        cap.setObjectName("Faint")
+        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(img)
+        v.addWidget(cap)
+        return w
+
+    @staticmethod
+    def _fmt_ms(ms: int) -> str:
+        secs = ms // 1000
+        return f"{secs // 60:02d}:{secs % 60:02d}"
+
     def apply_theme(self) -> None:
         self.back_btn.setIcon(self.theme.icon("chevron-left", "text_muted", 18))
+        self.copy_btn.setIcon(self.theme.icon("copy", "on_primary", 16))
         self.resummarise_btn.setIcon(self.theme.icon("sparkles", "text_muted", 16))
         self.reprocess_btn.setIcon(self.theme.icon("refresh", "text_muted", 16))
         self.folder_btn.setIcon(self.theme.icon("folder", "text_muted", 16))
@@ -375,6 +445,10 @@ class DetailPage(QWidget):
             return
         if QMessageBox.question(self, "Delete meeting", "Delete this meeting and its record?") \
                 == QMessageBox.StandardButton.Yes:
+            m = self.repo.get(self.meeting_id)
+            if m.audio_dir and os.path.isdir(m.audio_dir):
+                import shutil
+                shutil.rmtree(m.audio_dir, ignore_errors=True)  # audio + screenshots
             self.repo.delete(self.meeting_id)
             self.shell.notify_data_changed()
             self.shell.show_home()
@@ -385,3 +459,22 @@ class DetailPage(QWidget):
         m = self.repo.get(self.meeting_id)
         if m.audio_dir and os.path.isdir(m.audio_dir):
             os.startfile(m.audio_dir)  # noqa: S606
+
+    def _copy_summary(self) -> None:
+        """Put the notes on the clipboard as rich HTML + clean plain text so they
+        paste cleanly into Notion / email / anywhere (no markdown symbols)."""
+        if self.meeting_id is None:
+            return
+        m = self.repo.get(self.meeting_id)
+        if not m.notes:
+            return
+        from PySide6.QtCore import QMimeData
+        from PySide6.QtWidgets import QApplication
+
+        from ..notes import render
+
+        mime = QMimeData()
+        mime.setHtml(render.to_html(m.notes, date_text=m.date_text, attendees=m.attendees))
+        mime.setText(render.to_plaintext(m.notes, date_text=m.date_text, attendees=m.attendees))
+        QApplication.clipboard().setMimeData(mime)
+        self.status_label.setText("Summary copied — paste into Notion, email, anywhere.")

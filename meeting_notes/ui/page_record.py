@@ -14,13 +14,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+import time
+
 from ..audio import devices as dev
 from ..audio.capture import DualStreamRecorder
+from ..capture.screen import ScreenRecorder
 from ..paths import meeting_dir
 from ..util.dates import today_pair
 from . import icons
@@ -42,12 +46,22 @@ class RecordPage(QWidget):
         self.recorder: DualStreamRecorder | None = None
         self.meeting_id: int | None = None
         self.worker: FuncWorker | None = None
+        self._screen_rec: ScreenRecorder | None = None
+        self._record_t0 = 0.0
         self._human_date, self._iso_date = today_pair()
         self._build()
 
     # ---------- layout ----------
     def _build(self) -> None:
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        outer.addWidget(scroll)
+        scroll.setWidget(host)
+        root = QVBoxLayout(host)
         root.setContentsMargins(40, 32, 40, 32)
         root.setSpacing(18)
 
@@ -113,6 +127,10 @@ class RecordPage(QWidget):
         self.headphones.setChecked(self.cfg.headphones_mode)
         srl.addSpacing(4)
         srl.addWidget(self.headphones)
+        self.capture_screen = QCheckBox("Capture my screen during the meeting (screenshots for context)")
+        self.capture_screen.setChecked(self.cfg.capture_screen)
+        self.capture_screen.toggled.connect(self._toggle_screen_capture)
+        srl.addWidget(self.capture_screen)
         root.addWidget(src)
 
         # live meters card
@@ -247,6 +265,7 @@ class RecordPage(QWidget):
                 mic_index=mic.index, mic_channels=mic.channels, mic_rate=mic.default_samplerate,
                 loop_index=them.index, loop_channels=them.channels, loop_rate=them.default_samplerate,
             )
+            self._record_t0 = time.monotonic()
             self.recorder.start()
         except Exception as e:
             QMessageBox.critical(self, "Could not start", f"Failed to open audio streams:\n{e}")
@@ -261,6 +280,32 @@ class RecordPage(QWidget):
         self.status_label.setText("Recording… attendees stay editable.")
         self.shell.notify_data_changed()
         self.poll.start()
+        self.cfg.capture_screen = self.capture_screen.isChecked()
+        self.cfg.save()
+        self._maybe_start_screen()
+
+    def _maybe_start_screen(self) -> None:
+        if not self.capture_screen.isChecked() or self.meeting_id is None:
+            return
+        if self._screen_rec and self._screen_rec.running:
+            return
+        out = meeting_dir(self.meeting_id) / "screenshots"
+        self._screen_rec = ScreenRecorder(out, start_monotonic=self._record_t0, monitor=self.cfg.screen_monitor)
+        self._screen_rec.start()
+
+    def _stop_screen(self) -> None:
+        if self._screen_rec:
+            self._screen_rec.stop()
+            self._screen_rec = None
+
+    def _toggle_screen_capture(self, checked: bool) -> None:
+        self.cfg.capture_screen = checked
+        self.cfg.save()
+        if self.recorder and self.recorder.running:
+            if checked:
+                self._maybe_start_screen()
+            else:
+                self._stop_screen()
 
     def _on_poll(self) -> None:
         if not self.recorder:
@@ -276,6 +321,7 @@ class RecordPage(QWidget):
 
     def _stop(self) -> None:
         self.poll.stop()
+        self._stop_screen()
         self.record_btn.setEnabled(False)
         self.record_btn.setText("Processing…")
         self._persist_attendees()

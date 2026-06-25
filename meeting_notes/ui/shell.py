@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from . import icons, logo
+from .page_ask import AskPage
 from .page_detail import DetailPage
 from .page_home import HomePage
 from .page_record import RecordPage
@@ -44,6 +45,7 @@ class Shell(QMainWindow):
         self.record = RecordPage(self, repo, cfg, theme)
         self.detail = DetailPage(self, repo, cfg, theme)
         self.settings = SettingsPage(self, repo, cfg, theme)
+        self.ask = AskPage(self, repo, cfg, theme)
 
         self._build()
         self.theme.changed.connect(self._on_theme_changed)
@@ -61,7 +63,7 @@ class Shell(QMainWindow):
 
         self.sidebar = self._sidebar()
         self.stack = QStackedWidget()
-        for page in (self.home, self.record, self.detail, self.settings):
+        for page in (self.home, self.record, self.detail, self.settings, self.ask):
             self.stack.addWidget(page)
 
         # A splitter makes the sidebar drag-resizable; its order flips for L/R.
@@ -152,9 +154,11 @@ class Shell(QMainWindow):
         )
         lay.addWidget(self.search)
 
-        # nav: home
+        # nav: home + ask
         self.home_btn = self._nav_button("Home", self.show_home)
         lay.addWidget(self.home_btn)
+        self.ask_btn = self._nav_button("Ask Earshot", self.show_ask)
+        lay.addWidget(self.ask_btn)
 
         sect = QLabel("MEETING NOTES")
         sect.setObjectName("SectionLabel")
@@ -189,12 +193,18 @@ class Shell(QMainWindow):
     # ---------- navigation ----------
     def _set_active(self, which: str) -> None:
         self.home_btn.setChecked(which == "home")
+        self.ask_btn.setChecked(which == "ask")
         self.settings_btn.setChecked(which == "settings")
 
     def show_home(self) -> None:
         self.home.refresh()
         self.stack.setCurrentWidget(self.home)
         self._set_active("home")
+
+    def show_ask(self) -> None:
+        self.ask.on_shown()
+        self.stack.setCurrentWidget(self.ask)
+        self._set_active("ask")
 
     def show_record(self) -> None:
         self.record.on_shown()
@@ -243,7 +253,7 @@ class Shell(QMainWindow):
     def _on_theme_changed(self, _mode: str) -> None:
         self._refresh_sidebar_icons()
         self._rebuild_list()
-        for page in (self.home, self.record, self.detail, self.settings):
+        for page in (self.home, self.record, self.detail, self.settings, self.ask):
             page.apply_theme()
         # rebuild colour-dependent content
         self.home.refresh()
@@ -256,6 +266,7 @@ class Shell(QMainWindow):
         self.logo.setStyleSheet("")
         self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
+        self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))
         self.settings_btn.setIcon(icons.icon("settings", self.theme.color("text_muted"), 18))
         dark = self.theme.mode == "dark"
         self.theme_btn.setText("  Light mode" if dark else "  Dark mode")

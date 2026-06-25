@@ -38,6 +38,10 @@ class Config:
     loopback_device_name: Optional[str] = None
     headphones_mode: bool = True          # True => skip echo cancellation (no bleed)
 
+    # --- Screen capture ---
+    capture_screen: bool = False          # periodic screenshots while recording
+    screen_monitor: int = 1               # 1 = primary monitor
+
     # --- Output (Notion deferred; kept for forward-compatibility) ---
     notion_token: str = ""
     notion_database_id: str = ""
