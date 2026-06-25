@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+# secrets — never commit local config / keys
+config.json
+*.local.json
+.env.*
+# local data / recordings / db
+recordings/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.wav
+*.flac
+# packaging output
+build/
+dist/
+*.spec.bak

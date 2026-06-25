@@ -1,0 +1,16 @@
+# Meeting Notes — Python 3.12 dependencies
+# GUI
+PySide6>=6.7,<6.9
+# Audio capture (mic + WASAPI loopback on Windows)
+PyAudioWPatch>=0.2.12.7
+# Audio math / IO / resampling
+numpy>=1.26,<3
+soundfile>=0.12
+soxr>=0.5
+scipy>=1.11            # cross-correlation for offline AEC alignment
+# Acoustic echo cancellation (WebRTC AEC3 via LiveKit; optional at runtime)
+livekit>=0.18
+# Transcription + notes + http
+httpx>=0.27
+anthropic>=0.40
+pydantic>=2.7
