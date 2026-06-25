@@ -18,8 +18,12 @@ DEFAULT_WHISPER_URL = ""
 
 @dataclass
 class Config:
+    # --- Storage ---
+    data_dir: str = ""                    # custom folder for recordings + screenshots; "" = app default
+
     # --- Transcription ---
     transcription_provider: str = "home"  # "home" (self-hosted Whisper) | "online" (OpenAI-compatible)
+    auto_transcribe: bool = True          # transcribe automatically when a recording stops
     whisper_language: str = "en"          # "" => auto-detect (applies to both providers)
     # home server
     whisper_url: str = DEFAULT_WHISPER_URL
@@ -32,6 +36,7 @@ class Config:
     # --- Notes (Anthropic) ---
     anthropic_api_key: str = ""           # read from env ANTHROPIC_API_KEY if blank
     anthropic_model: str = "claude-sonnet-4-6"  # richer notes than Haiku; user can change in Settings
+    auto_summary: bool = True             # generate AI notes automatically after transcription
 
     # --- Audio devices (stored by name; re-resolved to index at record time) ---
     mic_device_name: Optional[str] = None

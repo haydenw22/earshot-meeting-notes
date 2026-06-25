@@ -1,11 +1,16 @@
-"""Settings page: appearance (light/dark), transcription server, notes API, and
-an About tab. Cards inside tabs, matching the rest of the app.
+"""Settings: appearance, audio devices + storage, transcription, AI, and About.
+
+Cards inside tabs, matching the rest of the app.
 """
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -16,7 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import __version__
+from .. import __version__, paths
+from ..audio import devices as dev
+from ..capture import screen as screen_capture
 from ..transcription import whisper_client
 from .widgets import Card
 
@@ -40,8 +47,9 @@ class SettingsPage(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._general_tab(), "General")
+        self.tabs.addTab(self._audio_tab(), "Audio")
         self.tabs.addTab(self._transcription_tab(), "Transcription")
-        self.tabs.addTab(self._notes_tab(), "Notes")
+        self.tabs.addTab(self._ai_tab(), "AI")
         self.tabs.addTab(self._about_tab(), "About")
         root.addWidget(self.tabs, 1)
 
@@ -70,11 +78,16 @@ class SettingsPage(QWidget):
             lay.addWidget(s)
         return card, lay
 
-    def _general_tab(self) -> QWidget:
+    def _tab(self) -> tuple[QWidget, QVBoxLayout]:
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(2, 16, 2, 2)
         lay.setSpacing(16)
+        return w, lay
+
+    # ---------- General ----------
+    def _general_tab(self) -> QWidget:
+        w, lay = self._tab()
         card, cl = self._card("Appearance", "Choose how the app looks.")
         row = QHBoxLayout()
         self.light_btn = QPushButton("  Light")
@@ -106,7 +119,6 @@ class SettingsPage(QWidget):
         srow.addStretch(1)
         scl.addLayout(srow)
         lay.addWidget(side_card)
-
         lay.addStretch(1)
         return w
 
@@ -118,13 +130,79 @@ class SettingsPage(QWidget):
         self.side_left_btn.setChecked(self.cfg.sidebar_side != "right")
         self.side_right_btn.setChecked(self.cfg.sidebar_side == "right")
 
-    def _transcription_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(2, 16, 2, 2)
-        lay.setSpacing(16)
+    # ---------- Audio ----------
+    def _audio_tab(self) -> QWidget:
+        w, lay = self._tab()
 
-        # source selector + shared language
+        card, cl = self._card("Default devices", "Pre-selected when you start a new recording.")
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.mic_combo = QComboBox()
+        self.them_combo = QComboBox()
+        self._fill_device_combo(self.mic_combo, dev.list_input_devices(), self.cfg.mic_device_name)
+        self._fill_device_combo(self.them_combo, dev.list_loopback_devices(), self.cfg.loopback_device_name)
+        form.addRow("Microphone", self.mic_combo)
+        form.addRow("System audio", self.them_combo)
+        self.monitor_combo = QComboBox()
+        for i, label in enumerate(screen_capture.list_monitors(), start=1):
+            self.monitor_combo.addItem(label, i)
+        idx = max(0, self.cfg.screen_monitor - 1)
+        if idx < self.monitor_combo.count():
+            self.monitor_combo.setCurrentIndex(idx)
+        form.addRow("Screen-capture monitor", self.monitor_combo)
+        cl.addLayout(form)
+        lay.addWidget(card)
+
+        store_card, stl = self._card(
+            "Recordings & screenshots folder",
+            "Where audio and screenshots are saved. A subfolder is created per meeting. The "
+            "database and settings stay in the app folder.",
+        )
+        self.data_dir_label = QLabel(self.cfg.data_dir or "(default app folder)")
+        self.data_dir_label.setObjectName("Muted")
+        self.data_dir_label.setWordWrap(True)
+        stl.addWidget(self.data_dir_label)
+        brow = QHBoxLayout()
+        pick = QPushButton("Choose folder…")
+        pick.setCursor(Qt.CursorShape.PointingHandCursor)
+        pick.clicked.connect(self._pick_data_dir)
+        reset = QPushButton("Use default")
+        reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        reset.clicked.connect(lambda: self._set_data_dir(""))
+        brow.addWidget(pick)
+        brow.addWidget(reset)
+        brow.addStretch(1)
+        stl.addLayout(brow)
+        lay.addWidget(store_card)
+        lay.addStretch(1)
+        return w
+
+    @staticmethod
+    def _fill_device_combo(combo: QComboBox, devices: list, current_name) -> None:
+        combo.addItem("System default", None)
+        for d in devices:
+            combo.addItem(d.name, d.name)
+        if current_name:
+            i = combo.findData(current_name)
+            if i >= 0:
+                combo.setCurrentIndex(i)
+
+    def _pick_data_dir(self) -> None:
+        start = self.cfg.data_dir or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(self, "Choose recordings folder", start)
+        if folder:
+            self._set_data_dir(folder)
+
+    def _set_data_dir(self, folder: str) -> None:
+        self.cfg.data_dir = folder
+        paths.set_recordings_dir(folder)
+        self.cfg.save()
+        self.data_dir_label.setText(folder or "(default app folder)")
+
+    # ---------- Transcription ----------
+    def _transcription_tab(self) -> QWidget:
+        w, lay = self._tab()
+
         src_card, scl = self._card("Transcription source", "Where your audio gets transcribed.")
         self.provider_combo = QComboBox()
         self.provider_combo.addItem("Home server (self-hosted Whisper)", "home")
@@ -138,9 +216,11 @@ class SettingsPage(QWidget):
         form0.addRow("Source", self.provider_combo)
         form0.addRow("Language", self.language)
         scl.addLayout(form0)
+        self.auto_transcribe = QCheckBox("Automatically transcribe when a recording stops")
+        self.auto_transcribe.setChecked(self.cfg.auto_transcribe)
+        scl.addWidget(self.auto_transcribe)
         lay.addWidget(src_card)
 
-        # home server group
         self.home_card, hcl = self._card("Home server", "Your self-hosted whisper-asr-webservice on the LAN.")
         hform = QFormLayout()
         hform.setSpacing(10)
@@ -150,17 +230,12 @@ class SettingsPage(QWidget):
         hcl.addLayout(hform)
         lay.addWidget(self.home_card)
 
-        # online service group
-        self.online_card, ocl = self._card("Online service", "Any OpenAI-compatible audio API. Use a Whisper model so timestamps come back.")
+        self.online_card, ocl = self._card("Online service", "Any OpenAI-compatible audio API. The API key is in the AI tab.")
         oform = QFormLayout()
         oform.setSpacing(10)
         self.online_base_url = QLineEdit(self.cfg.online_base_url)
-        self.online_key = QLineEdit(self.cfg.online_api_key)
-        self.online_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.online_key.setPlaceholderText("sk-…  (or set OPENAI_API_KEY)")
         self.online_model = QLineEdit(self.cfg.online_model)
         oform.addRow("Base URL", self.online_base_url)
-        oform.addRow("API key", self.online_key)
         oform.addRow("Model", self.online_model)
         ocl.addLayout(oform)
         hint = QLabel("OpenAI → https://api.openai.com/v1 · whisper-1      Groq → https://api.groq.com/openai/v1 · whisper-large-v3")
@@ -169,7 +244,6 @@ class SettingsPage(QWidget):
         ocl.addWidget(hint)
         lay.addWidget(self.online_card)
 
-        # test connection (uses the selected source)
         test_row = QHBoxLayout()
         self.test_btn = QPushButton("Test connection")
         self.test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -191,55 +265,7 @@ class SettingsPage(QWidget):
         self.home_card.setVisible(not online)
         self.online_card.setVisible(online)
 
-    def _notes_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(2, 16, 2, 2)
-        lay.setSpacing(16)
-        card, cl = self._card("Claude (Anthropic)", "Used to turn the transcript into notes. Stored locally.")
-        form = QFormLayout()
-        form.setSpacing(10)
-        self.api_key = QLineEdit(self.cfg.anthropic_api_key)
-        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key.setPlaceholderText("sk-ant-…  (or set ANTHROPIC_API_KEY)")
-        self.model = QLineEdit(self.cfg.anthropic_model)
-        form.addRow("API key", self.api_key)
-        form.addRow("Model", self.model)
-        cl.addLayout(form)
-        lay.addWidget(card)
-        lay.addStretch(1)
-        return w
-
-    def _about_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(2, 16, 2, 2)
-        lay.setSpacing(16)
-        card, cl = self._card("Earshot", f"Version {__version__}")
-        body = QLabel(
-            "Earshot records you and the other side on separate channels, transcribes on "
-            "your home server or an online service, and writes notes with Claude Haiku. "
-            "Your meetings stay on this PC."
-        )
-        body.setObjectName("Muted")
-        body.setWordWrap(True)
-        cl.addWidget(body)
-        lay.addWidget(card)
-        lay.addStretch(1)
-        return w
-
-    # ---------- behaviour ----------
-    def _set_theme(self, mode: str) -> None:
-        self.theme.set_mode(mode)
-        self._sync_theme_buttons()
-
-    def _sync_theme_buttons(self) -> None:
-        self.light_btn.setChecked(self.theme.mode == "light")
-        self.dark_btn.setChecked(self.theme.mode == "dark")
-
     def _test(self) -> None:
-        import os
-
         self.test_label.setText("Testing…")
         self.test_label.repaint()
         if self._provider() == "online":
@@ -253,15 +279,76 @@ class SettingsPage(QWidget):
             f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
         )
 
+    # ---------- AI ----------
+    def _ai_tab(self) -> QWidget:
+        w, lay = self._tab()
+        card, cl = self._card("Claude (Anthropic)", "Used to turn the transcript into notes and to answer questions. Stored locally.")
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.api_key = QLineEdit(self.cfg.anthropic_api_key)
+        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key.setPlaceholderText("sk-ant-…  (or set ANTHROPIC_API_KEY)")
+        self.model = QLineEdit(self.cfg.anthropic_model)
+        form.addRow("Claude API key", self.api_key)
+        form.addRow("Model", self.model)
+        cl.addLayout(form)
+        self.auto_summary = QCheckBox("Automatically generate notes after transcription")
+        self.auto_summary.setChecked(self.cfg.auto_summary)
+        cl.addWidget(self.auto_summary)
+        lay.addWidget(card)
+
+        oa_card, ocl = self._card("OpenAI", "Only needed if you use the online transcription service (OpenAI or Groq).")
+        oform = QFormLayout()
+        oform.setSpacing(10)
+        self.online_key = QLineEdit(self.cfg.online_api_key)
+        self.online_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.online_key.setPlaceholderText("sk-…  (or set OPENAI_API_KEY)")
+        oform.addRow("OpenAI API key", self.online_key)
+        ocl.addLayout(oform)
+        lay.addWidget(oa_card)
+        lay.addStretch(1)
+        return w
+
+    # ---------- About ----------
+    def _about_tab(self) -> QWidget:
+        w, lay = self._tab()
+        card, cl = self._card("Earshot", f"Version {__version__}")
+        body = QLabel(
+            "Earshot records you and the other side on separate channels, transcribes on "
+            "your home server or an online service, and writes notes with Claude. "
+            "Your meetings stay on this PC."
+        )
+        body.setObjectName("Muted")
+        body.setWordWrap(True)
+        cl.addWidget(body)
+        lay.addWidget(card)
+        lay.addStretch(1)
+        return w
+
+    # ---------- theme ----------
+    def _set_theme(self, mode: str) -> None:
+        self.theme.set_mode(mode)
+        self._sync_theme_buttons()
+
+    def _sync_theme_buttons(self) -> None:
+        self.light_btn.setChecked(self.theme.mode == "light")
+        self.dark_btn.setChecked(self.theme.mode == "dark")
+
+    # ---------- save ----------
     def _save(self) -> None:
         self.cfg.transcription_provider = self._provider()
         self.cfg.whisper_language = self.language.text().strip()
-        self.cfg.whisper_url = self.whisper_url.text().strip() or self.cfg.whisper_url
+        self.cfg.whisper_url = self.whisper_url.text().strip()
         self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
-        self.cfg.online_api_key = self.online_key.text().strip()
         self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
+        self.cfg.online_api_key = self.online_key.text().strip()
         self.cfg.anthropic_api_key = self.api_key.text().strip()
-        self.cfg.anthropic_model = self.model.text().strip() or "claude-haiku-4-5"
+        self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
+        self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
+        self.cfg.auto_summary = self.auto_summary.isChecked()
+        self.cfg.mic_device_name = self.mic_combo.currentData()
+        self.cfg.loopback_device_name = self.them_combo.currentData()
+        self.cfg.screen_monitor = self.monitor_combo.currentData() or 1
         self.cfg.save()
         self.save_btn.setText("Saved ✓")
         from PySide6.QtCore import QTimer

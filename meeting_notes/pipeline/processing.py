@@ -55,6 +55,7 @@ def process_recording(
     cfg: Config,
     *,
     progress: Optional[Progress] = None,
+    summarize: bool = True,
 ) -> None:
     progress = progress or (lambda _m: None)
     m = repo.get(meeting_id)
@@ -90,7 +91,7 @@ def process_recording(
 
         # 5. Summarise with Haiku (if a key is configured).
         api_key = cfg.resolved_anthropic_key()
-        if api_key and merged["text"].strip():
+        if summarize and api_key and merged["text"].strip():
             repo.update(meeting_id, status="Summarizing")
             progress("Writing notes")
             try:

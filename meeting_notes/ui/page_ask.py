@@ -38,12 +38,22 @@ class AskPage(QWidget):
         root.setContentsMargins(40, 28, 40, 20)
         root.setSpacing(14)
 
+        header = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
         head = QLabel("Ask Earshot")
         head.setObjectName("H1")
         sub = QLabel("Ask anything about your past meetings — answers cite the source.")
         sub.setObjectName("Muted")
-        root.addWidget(head)
-        root.addWidget(sub)
+        titles.addWidget(head)
+        titles.addWidget(sub)
+        header.addLayout(titles)
+        header.addStretch(1)
+        self.new_chat_btn = QPushButton("New chat")
+        self.new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_chat_btn.clicked.connect(self._new_chat)
+        header.addWidget(self.new_chat_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -139,6 +149,22 @@ class AskPage(QWidget):
         self.send_btn.setEnabled(not busy)
         self.send_btn.setText("…" if busy else "Ask")
         self.input.setEnabled(not busy)
+        self.new_chat_btn.setEnabled(not busy)
+
+    def _new_chat(self) -> None:
+        i = 0
+        while i < self.chat_lay.count():
+            w = self.chat_lay.itemAt(i).widget()
+            if w:
+                self.chat_lay.takeAt(i)
+                w.setParent(None)
+                w.deleteLater()
+            else:
+                i += 1  # keep the trailing stretch
+        self._empty = self._empty_state()
+        self.chat_lay.insertWidget(0, self._empty)
+        self.input.clear()
+        self.input.setFocus()
 
     # ---------- bubbles ----------
     def _add_bubble(self, text: str, *, role: str) -> QWidget:

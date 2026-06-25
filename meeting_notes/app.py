@@ -54,6 +54,8 @@ def run() -> int:
     app.setWindowIcon(icon)
 
     cfg = Config.load()
+    from .paths import set_recordings_dir
+    set_recordings_dir(cfg.data_dir)  # honour a custom recordings folder
     repo = MeetingRepository()
 
     theme = ThemeController(cfg)

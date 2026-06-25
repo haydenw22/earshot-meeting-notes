@@ -343,6 +343,7 @@ class DetailPage(QWidget):
 
     # ---------- screenshots ----------
     def _render_screenshots(self, m) -> None:
+        self._screen_meeting = m
         while self.screen_grid.count():
             item = self.screen_grid.takeAt(0)
             w = item.widget()
@@ -351,11 +352,25 @@ class DetailPage(QWidget):
                 w.deleteLater()
         shots = screen_capture.list_screenshots(Path(m.audio_dir)) if m.audio_dir else []
         self.tabs.setTabVisible(self._screen_tab_index, bool(shots))
-        per_row = 3
+        if not shots:
+            self._cur_cols = 0
+            return
+        cols = self._screen_cols()
+        self._cur_cols = cols
+        vw = self.screen_scroll.viewport().width() or 900
+        thumb_w = max(180, (vw - 40 - 12 * (cols - 1)) // cols)  # fill the columns
+        align = Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         for i, (ms, path) in enumerate(shots):
-            self.screen_grid.addWidget(self._thumb(ms, path), i // per_row, i % per_row)
+            self.screen_grid.addWidget(self._thumb(ms, path, thumb_w), i // cols, i % cols, align)
+        rows = (len(shots) + cols - 1) // cols
+        self.screen_grid.setRowStretch(rows, 1)       # pack to the top (no tall empty cells)
+        self.screen_grid.setColumnStretch(cols, 1)    # pack to the left
 
-    def _thumb(self, ms: int, path: Path) -> QWidget:
+    def _screen_cols(self) -> int:
+        vw = self.screen_scroll.viewport().width() or self.width() or 900
+        return 2 if vw < 900 else (3 if vw < 1500 else 4)
+
+    def _thumb(self, ms: int, path: Path, width: int = 300) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
@@ -363,11 +378,11 @@ class DetailPage(QWidget):
         img = _ClickableImage(lambda p=path: os.startfile(str(p)))  # noqa: S606
         pm = QPixmap(str(path))
         if not pm.isNull():
-            img.setPixmap(pm.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation))
+            img.setPixmap(pm.scaledToWidth(int(width), Qt.TransformationMode.SmoothTransformation))
         img.setStyleSheet(f"border:1px solid {self.theme.color('border')}; border-radius:8px;")
         cap = QLabel(self._fmt_ms(ms))
         cap.setObjectName("Faint")
-        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cap.setAlignment(Qt.AlignmentFlag.AlignLeft)
         v.addWidget(img)
         v.addWidget(cap)
         return w
@@ -376,6 +391,12 @@ class DetailPage(QWidget):
     def _fmt_ms(ms: int) -> str:
         secs = ms // 1000
         return f"{secs // 60:02d}:{secs % 60:02d}"
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        m = getattr(self, "_screen_meeting", None)
+        if m is not None and getattr(self, "_cur_cols", 0) and self._screen_cols() != self._cur_cols:
+            self._render_screenshots(m)
 
     def apply_theme(self) -> None:
         self.back_btn.setIcon(self.theme.icon("chevron-left", "text_muted", 18))

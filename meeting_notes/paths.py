@@ -8,9 +8,19 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 APP_DIR_NAME = "Earshot"
 _LEGACY_DIR_NAMES = ("MeetingNotes",)  # pre-rename data dirs to migrate from
+
+# Optional user-chosen folder for recordings + screenshots (set at startup from
+# Config.data_dir). The DB + config always stay in the app data dir.
+_recordings_override: Optional[Path] = None
+
+
+def set_recordings_dir(path) -> None:
+    global _recordings_override
+    _recordings_override = Path(path) if path else None
 
 
 def app_data_dir() -> Path:
@@ -38,7 +48,7 @@ def app_data_dir() -> Path:
 
 
 def recordings_dir() -> Path:
-    d = app_data_dir() / "recordings"
+    d = _recordings_override if _recordings_override is not None else (app_data_dir() / "recordings")
     d.mkdir(parents=True, exist_ok=True)
     return d
 

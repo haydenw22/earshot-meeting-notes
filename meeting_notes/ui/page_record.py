@@ -340,7 +340,10 @@ class RecordPage(QWidget):
             result = recorder.stop()
             wr.save_recording(result.me_48k, result.them_48k, audio_dir)
             repo.update(mid, audio_dir=str(audio_dir), duration_secs=result.duration_secs, status="Recorded")
-            process_recording(repo, mid, cfg, progress=progress)
+            if cfg.auto_transcribe:
+                process_recording(repo, mid, cfg, progress=progress, summarize=cfg.auto_summary)
+            else:
+                progress("Saved — open the meeting to transcribe it when you're ready")
             return mid
 
         self.worker = FuncWorker(job)
