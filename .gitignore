@@ -7,6 +7,8 @@ __pycache__/
 config.json
 *.local.json
 .env.*
+# private real-meeting examples — never publish
+Meeting Examples/
 # local data / recordings / db
 recordings/
 data/
