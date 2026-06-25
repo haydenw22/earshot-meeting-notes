@@ -90,8 +90,33 @@ class SettingsPage(QWidget):
         row.addStretch(1)
         cl.addLayout(row)
         lay.addWidget(card)
+
+        side_card, scl = self._card("Side menu", "Drag its edge to resize. Choose which side it sits on.")
+        srow = QHBoxLayout()
+        self.side_left_btn = QPushButton("  Left")
+        self.side_right_btn = QPushButton("  Right")
+        for b in (self.side_left_btn, self.side_right_btn):
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setMinimumHeight(40)
+        self.side_left_btn.clicked.connect(lambda: self._set_side("left"))
+        self.side_right_btn.clicked.connect(lambda: self._set_side("right"))
+        srow.addWidget(self.side_left_btn)
+        srow.addWidget(self.side_right_btn)
+        srow.addStretch(1)
+        scl.addLayout(srow)
+        lay.addWidget(side_card)
+
         lay.addStretch(1)
         return w
+
+    def _set_side(self, side: str) -> None:
+        self.shell.set_sidebar_side(side)
+        self._sync_side_buttons()
+
+    def _sync_side_buttons(self) -> None:
+        self.side_left_btn.setChecked(self.cfg.sidebar_side != "right")
+        self.side_right_btn.setChecked(self.cfg.sidebar_side == "right")
 
     def _transcription_tab(self) -> QWidget:
         w = QWidget()
@@ -245,5 +270,8 @@ class SettingsPage(QWidget):
     def apply_theme(self) -> None:
         self.light_btn.setIcon(self.theme.icon("sun", "text", 18))
         self.dark_btn.setIcon(self.theme.icon("moon", "text", 18))
+        self.side_left_btn.setIcon(self.theme.icon("chevron-left", "text", 16))
+        self.side_right_btn.setIcon(self.theme.icon("chevron-right", "text", 16))
         self.test_btn.setIcon(self.theme.icon("globe", "text_muted", 16))
         self._sync_theme_buttons()
+        self._sync_side_buttons()

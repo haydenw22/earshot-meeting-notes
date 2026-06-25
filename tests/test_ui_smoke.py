@@ -24,8 +24,9 @@ from meeting_notes.ui.theme_controller import ThemeController  # noqa: E402
 
 NOTES = (
     '{"title":"Demo","summary":"A demo meeting.","attendees":["Hayden"],'
-    '"decisions":["Ship it"],"action_items":[{"task":"Write docs","owner":"Hayden","due":null}],'
-    '"topics":["demo","docs"]}'
+    '"action_items":[{"task":"Write docs","owner":"Hayden","done":false},'
+    '{"task":"Ship it","owner":null,"done":true}],'
+    '"sections":[{"heading":"Topic","bullets":["A **key** point","Another point"]}]}'
 )
 
 

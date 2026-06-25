@@ -3,15 +3,20 @@ in tabs, plus re-summarise / re-transcribe / open-folder / delete actions.
 """
 from __future__ import annotations
 
+import html as _html
+import json
 import os
+import re as _re
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
@@ -23,37 +28,10 @@ from .widgets import Card, status_chip
 from .workers import FuncWorker
 
 
-def _notes_html(m: Meeting, theme) -> str:
-    notes = m.notes
-    text = theme.color("text")
-    muted = theme.color("text_muted")
-    primary = theme.color("primary")
-    if not notes:
-        msg = ("Transcribed — add an Anthropic API key in Settings and click Re-summarise."
-               if m.transcript else "No notes yet.")
-        return f'<div style="color:{muted}; font-size:14px;">{msg}</div>'
-    parts = [f'<div style="color:{text}; font-size:14px; line-height:1.6;">']
-    if notes.get("summary"):
-        parts.append(f'<p style="color:{text};">{notes["summary"]}</p>')
-    if notes.get("decisions"):
-        items = "".join(f"<li>{d}</li>" for d in notes["decisions"])
-        parts.append(f'<h3 style="color:{text}; margin-top:18px;">Decisions</h3><ul>{items}</ul>')
-    if notes.get("action_items"):
-        rows = []
-        for a in notes["action_items"]:
-            tail = []
-            if a.get("owner"):
-                tail.append(f'<b style="color:{primary};">{a["owner"]}</b>')
-            if a.get("due"):
-                tail.append(f'due {a["due"]}')
-            suffix = f' &middot; {", ".join(tail)}' if tail else ""
-            rows.append(f"<li>{a.get('task','')}{suffix}</li>")
-        parts.append(f'<h3 style="color:{text}; margin-top:18px;">Action items</h3><ul>{"".join(rows)}</ul>')
-    if notes.get("topics"):
-        chips = " ".join(f'<span style="color:{muted};">#{t}</span>' for t in notes["topics"])
-        parts.append(f'<h3 style="color:{text}; margin-top:18px;">Topics</h3><p>{chips}</p>')
-    parts.append("</div>")
-    return "".join(parts)
+def _md_to_html(text: str) -> str:
+    """Escape, then render **bold** as <b> for QLabel rich text."""
+    esc = _html.escape(text or "")
+    return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
 
 
 class DetailPage(QWidget):
@@ -101,9 +79,18 @@ class DetailPage(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(8, 8, 8, 8)
         self.tabs = QTabWidget()
-        self.notes_view = QTextBrowser()
+        # Notes tab is a scrollable widget (so action items can be real checkboxes)
+        self.notes_scroll = QScrollArea()
+        self.notes_scroll.setWidgetResizable(True)
+        self.notes_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.notes_host = QWidget()
+        self.notes_lay = QVBoxLayout(self.notes_host)
+        self.notes_lay.setContentsMargins(20, 16, 20, 16)
+        self.notes_lay.setSpacing(8)
+        self.notes_lay.addStretch(1)
+        self.notes_scroll.setWidget(self.notes_host)
         self.transcript_view = QTextBrowser()
-        self.tabs.addTab(self.notes_view, "Notes")
+        self.tabs.addTab(self.notes_scroll, "Notes")
         self.tabs.addTab(self.transcript_view, "Transcript")
         cl.addWidget(self.tabs)
         root.addWidget(card, 1)
@@ -158,7 +145,7 @@ class DetailPage(QWidget):
         self.meta_row.insertWidget(idx, status_chip(m.status, self.theme))
         self._populate_attendees(m.attendees)
 
-        self.notes_view.setHtml(_notes_html(m, self.theme))
+        self._render_notes(m)
         self.transcript_view.setPlainText(m.transcript or "No transcript yet.")
         self.resummarise_btn.setEnabled(bool(m.transcript))
         self.reprocess_btn.setEnabled(bool(m.audio_dir))
@@ -209,6 +196,118 @@ class DetailPage(QWidget):
         self.att_panel.setVisible(show)
         self.att_btn.setIcon(self.theme.icon("chevron-down" if show else "chevron-right", "text_muted", 13))
 
+    # ---------- notes rendering (agenda, summary, checkbox actions, sections) ----------
+    def _render_notes(self, m) -> None:
+        while self.notes_lay.count():
+            item = self.notes_lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+
+        if m.agenda and m.agenda.strip():
+            self.notes_lay.addWidget(self._notes_heading("Agenda"))
+            ag = QLabel(m.agenda.strip())
+            ag.setObjectName("Muted")
+            ag.setWordWrap(True)
+            self.notes_lay.addWidget(ag)
+
+        notes = m.notes
+        if not notes:
+            msg = ("Transcribed — add an Anthropic API key in Settings and click Re-summarise."
+                   if m.transcript else "No notes yet.")
+            lbl = QLabel(msg)
+            lbl.setObjectName("Muted")
+            lbl.setWordWrap(True)
+            self.notes_lay.addWidget(lbl)
+            self.notes_lay.addStretch(1)
+            return
+
+        if notes.get("summary"):
+            s = QLabel(notes["summary"])
+            s.setWordWrap(True)
+            self.notes_lay.addWidget(s)
+
+        actions = notes.get("action_items") or []
+        if actions:
+            self.notes_lay.addWidget(self._notes_heading("Action items"))
+            for i, a in enumerate(actions):
+                self.notes_lay.addWidget(self._action_row(i, a))
+
+        for sec in notes.get("sections") or []:
+            heading = sec.get("heading") or ""
+            if heading:
+                self.notes_lay.addWidget(self._notes_heading(heading))
+            for bullet in sec.get("bullets") or []:
+                self.notes_lay.addWidget(self._bullet(bullet))
+
+        self.notes_lay.addStretch(1)
+
+    def _notes_heading(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setObjectName("H3")
+        lbl.setContentsMargins(0, 12, 0, 2)
+        return lbl
+
+    def _action_row(self, idx: int, a: dict) -> QWidget:
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 1, 0, 1)
+        rl.setSpacing(9)
+        cb = QCheckBox()
+        cb.setChecked(bool(a.get("done")))
+        cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        lbl = QLabel()
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setWordWrap(True)
+        owner = a.get("owner")
+
+        def render(done: bool) -> None:
+            task = _html.escape(a.get("task") or "")
+            if done:
+                task = f'<span style="color:{self.theme.color("text_faint")}; text-decoration:line-through;">{task}</span>'
+            suffix = (
+                f' &middot; <b style="color:{self.theme.color("primary")};">{_html.escape(owner)}</b>'
+                if owner else ""
+            )
+            lbl.setText(task + suffix)
+
+        render(bool(a.get("done")))
+
+        def on_toggle(checked: bool) -> None:
+            render(checked)
+            self._persist_action(idx, checked)
+
+        cb.toggled.connect(on_toggle)
+        rl.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+        rl.addWidget(lbl, 1)
+        return row
+
+    def _bullet(self, text: str) -> QWidget:
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(2, 0, 0, 0)
+        rl.setSpacing(8)
+        dot = QLabel("•")
+        dot.setObjectName("Muted")
+        rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+        lbl = QLabel(_md_to_html(text))
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setWordWrap(True)
+        rl.addWidget(lbl, 1)
+        return row
+
+    def _persist_action(self, idx: int, checked: bool) -> None:
+        if self.meeting_id is None:
+            return
+        m = self.repo.get(self.meeting_id)
+        notes = m.notes or {}
+        actions = notes.get("action_items") or []
+        if 0 <= idx < len(actions):
+            actions[idx]["done"] = bool(checked)
+            notes["action_items"] = actions
+            self.repo.update(self.meeting_id, notes_json=json.dumps(notes))
+
     def apply_theme(self) -> None:
         self.back_btn.setIcon(self.theme.icon("chevron-left", "text_muted", 18))
         self.resummarise_btn.setIcon(self.theme.icon("sparkles", "text_muted", 16))
@@ -251,7 +350,7 @@ class DetailPage(QWidget):
             m = repo.get(mid)
             notes = anthropic_client.generate_notes(
                 m.transcript or "", api_key=cfg.resolved_anthropic_key(),
-                attendees=m.attendees, human_date=m.date_text, model=cfg.anthropic_model,
+                attendees=m.attendees, agenda=m.agenda, human_date=m.date_text, model=cfg.anthropic_model,
             )
             repo.update(mid, title=notes.title, notes_json=notes.model_dump_json(),
                         attendees=notes.attendees or m.attendees, status="Done")

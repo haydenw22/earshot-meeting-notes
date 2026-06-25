@@ -31,7 +31,7 @@ class Config:
 
     # --- Notes (Anthropic) ---
     anthropic_api_key: str = ""           # read from env ANTHROPIC_API_KEY if blank
-    anthropic_model: str = "claude-haiku-4-5"
+    anthropic_model: str = "claude-sonnet-4-6"  # richer notes than Haiku; user can change in Settings
 
     # --- Audio devices (stored by name; re-resolved to index at record time) ---
     mic_device_name: Optional[str] = None
@@ -44,6 +44,8 @@ class Config:
 
     # --- Appearance ---
     theme_mode: str = "light"             # "light" | "dark"
+    sidebar_width: int = 258              # resizable; persisted
+    sidebar_side: str = "left"            # "left" | "right"
 
     # --- Misc ---
     keep_audio: bool = True               # retain raw + 2-channel audio after summary

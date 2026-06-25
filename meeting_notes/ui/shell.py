@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -57,17 +58,65 @@ class Shell(QMainWindow):
         row = QHBoxLayout(root)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
-        row.addWidget(self._sidebar())
 
+        self.sidebar = self._sidebar()
         self.stack = QStackedWidget()
         for page in (self.home, self.record, self.detail, self.settings):
             self.stack.addWidget(page)
-        row.addWidget(self.stack, 1)
+
+        # A splitter makes the sidebar drag-resizable; its order flips for L/R.
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setObjectName("MainSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(6)
+        self._arrange_splitter()
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        row.addWidget(self.splitter)
+
+    def _arrange_splitter(self) -> None:
+        """(Re)order sidebar + content for the configured side and apply width."""
+        w = max(180, int(self.cfg.sidebar_width or 258))
+        side = "right" if self.cfg.sidebar_side == "right" else "left"
+        self.sidebar.setParent(None)
+        self.stack.setParent(None)
+        if side == "left":
+            self.splitter.addWidget(self.sidebar)
+            self.splitter.addWidget(self.stack)
+            self._sidebar_index = 0
+            self.splitter.setStretchFactor(0, 0)
+            self.splitter.setStretchFactor(1, 1)
+            self.splitter.setSizes([w, max(480, self.width() - w)])
+        else:
+            self.splitter.addWidget(self.stack)
+            self.splitter.addWidget(self.sidebar)
+            self._sidebar_index = 1
+            self.splitter.setStretchFactor(0, 1)
+            self.splitter.setStretchFactor(1, 0)
+            self.splitter.setSizes([max(480, self.width() - w), w])
+        # border on the inner edge of the sidebar
+        self.sidebar.setProperty("side", side)
+        self.sidebar.style().unpolish(self.sidebar)
+        self.sidebar.style().polish(self.sidebar)
+
+    def _on_splitter_moved(self, *_) -> None:
+        sizes = self.splitter.sizes()
+        if self._sidebar_index < len(sizes):
+            self.cfg.sidebar_width = max(180, sizes[self._sidebar_index])
+            self.cfg.save()
+
+    def set_sidebar_side(self, side: str) -> None:
+        side = "right" if side == "right" else "left"
+        if side == self.cfg.sidebar_side:
+            return
+        self.cfg.sidebar_side = side
+        self.cfg.save()
+        self._arrange_splitter()
 
     def _sidebar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("Sidebar")
-        bar.setFixedWidth(258)
+        bar.setMinimumWidth(190)
+        bar.setMaximumWidth(640)
         lay = QVBoxLayout(bar)
         lay.setContentsMargins(16, 18, 16, 16)
         lay.setSpacing(12)

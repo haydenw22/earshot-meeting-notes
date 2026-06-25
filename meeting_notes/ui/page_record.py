@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QSizePolicy,
     QVBoxLayout,
@@ -78,6 +79,24 @@ class RecordPage(QWidget):
         self.attendees.editingFinished.connect(self._persist_attendees)
         sl.addWidget(self.attendees)
         root.addWidget(sess)
+
+        # agenda card — pre-meeting notes that stay on screen while recording and
+        # are fed to the AI as context.
+        ag = Card()
+        agl = QVBoxLayout(ag)
+        agl.setContentsMargins(22, 18, 22, 20)
+        agl.setSpacing(10)
+        ag_lbl = QLabel("Agenda / notes")
+        ag_lbl.setObjectName("H3")
+        agl.addWidget(ag_lbl)
+        self.agenda = QPlainTextEdit()
+        self.agenda.setPlaceholderText(
+            "Optional — talking points or an agenda to keep on screen during the call. "
+            "Also gives the AI summary more context."
+        )
+        self.agenda.setMinimumHeight(120)
+        agl.addWidget(self.agenda)
+        root.addWidget(ag)
 
         # audio sources card
         src = Card()
@@ -213,7 +232,10 @@ class RecordPage(QWidget):
             QMessageBox.warning(self, "Pick devices", "Choose both a microphone and a system-audio device.")
             return
         attendees = _parse_attendees(self.attendees.text())
-        meeting = self.repo.create(date_text=self._human_date, date_iso=self._iso_date, attendees=attendees)
+        agenda = self.agenda.toPlainText().strip()
+        meeting = self.repo.create(
+            date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda
+        )
         self.meeting_id = meeting.id
         self.repo.update(self.meeting_id, status="Recording", headphones_mode=self.headphones.isChecked())
         self.cfg.mic_device_name = mic.name
@@ -257,6 +279,8 @@ class RecordPage(QWidget):
         self.record_btn.setEnabled(False)
         self.record_btn.setText("Processing…")
         self._persist_attendees()
+        if self.meeting_id is not None:
+            self.repo.update(self.meeting_id, agenda=self.agenda.toPlainText().strip())
         recorder = self.recorder
         self.recorder = None
         mid = self.meeting_id
@@ -292,6 +316,8 @@ class RecordPage(QWidget):
     def _on_done(self, mid) -> None:
         self.status_label.setText("Done.")
         self._reset_controls()
+        self.attendees.clear()
+        self.agenda.clear()  # fresh form for the next recording
         self.shell.notify_data_changed()
         self.shell.open_meeting(int(mid))
 

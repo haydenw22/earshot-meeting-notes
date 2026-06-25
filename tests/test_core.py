@@ -65,18 +65,18 @@ def test_merge_crosstalk_dedupe():
 def test_schema():
     schema = notes_tool_schema()
     assert schema["type"] == "object"
-    assert "title" in schema["properties"]
-    assert schema["properties"]["action_items"]["items"]["properties"]["owner"]["type"] == ["string", "null"]
+    assert "sections" in schema["properties"]
+    assert schema["properties"]["action_items"]["items"]["properties"]["done"]["type"] == "boolean"
     notes = MeetingNotes.model_validate({
         "title": "Budget review for Q3",
         "summary": "We reviewed the budget.",
         "attendees": ["Hayden", "Sam"],
-        "decisions": ["Approved the Q3 budget"],
-        "action_items": [{"task": "Send the figures", "owner": "Sam", "due": None}],
-        "topics": ["budget"],
+        "action_items": [{"task": "Send the figures", "owner": "Sam", "done": False}],
+        "sections": [{"heading": "Budget", "bullets": ["**Approved** the Q3 budget"]}],
     })
     assert notes.action_items[0].owner == "Sam"
-    assert notes.action_items[0].due is None
+    assert notes.action_items[0].done is False
+    assert notes.sections[0].heading == "Budget"
     print("  schema OK")
 
 

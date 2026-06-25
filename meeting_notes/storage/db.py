@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     date_text        TEXT,                 -- human-readable, e.g. '25th June 2026'
     date_iso         TEXT,                 -- '2026-06-25' for sorting
     attendees        TEXT,                 -- JSON array; editable during recording
+    agenda           TEXT,                 -- pre-meeting agenda/notes (context for the AI)
     transcript       TEXT,                 -- merged speaker-labelled transcript
     notes_json       TEXT,                 -- structured MeetingNotes as JSON
     audio_dir        TEXT,                 -- folder holding raw + 2-channel audio
@@ -43,6 +44,16 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after v1 — applied to existing DBs via ALTER TABLE.
+_MIGRATIONS = {
+    "agenda": "ALTER TABLE meetings ADD COLUMN agenda TEXT",
+}
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(meetings)").fetchall()}
+    for col, ddl in _MIGRATIONS.items():
+        if col not in existing:
+            conn.execute(ddl)
     conn.commit()

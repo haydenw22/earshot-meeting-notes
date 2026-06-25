@@ -89,6 +89,12 @@ QMainWindow, #Root {{ background-color: {t['bg']}; }}
     background-color: {t['surface_alt']};
     border-right: 1px solid {t['border']};
 }}
+#Sidebar[side="right"] {{
+    border-right: none;
+    border-left: 1px solid {t['border']};
+}}
+QSplitter#MainSplitter::handle {{ background: transparent; }}
+QSplitter#MainSplitter::handle:hover {{ background: {t['primary_soft']}; }}
 #Topbar {{ background-color: transparent; }}
 
 /* ---------- text roles ---------- */

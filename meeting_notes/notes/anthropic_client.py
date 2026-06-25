@@ -15,18 +15,24 @@ from pydantic import ValidationError
 from .schema import MeetingNotes, notes_tool_schema
 
 SYSTEM_PROMPT = (
-    "You are a meeting-notes assistant. You are given a speaker-labelled transcript "
-    "produced by automatic speech recognition, so expect transcription errors, filler "
-    "words, and imperfect speaker labels. Produce accurate, concise structured notes by "
-    "calling the record_meeting_notes tool. Rules: "
-    "(1) title is a single sentence of at most ~12 words capturing the meeting's "
-    "purpose or outcome. "
-    "(2) Only record decisions that were actually agreed, not mere discussion. "
-    "(3) For each action item, infer the owner from the speaker labels or who committed "
-    "to it; use null if genuinely unclear — never invent a name. "
-    "(4) Infer attendees from the distinct speakers and any named people. "
-    "(5) Do not hallucinate content that is not supported by the transcript. "
-    "(6) Keep topics to short tags."
+    "You are an expert meeting-notes writer. You are given a speaker-labelled transcript "
+    "produced by automatic speech recognition (expect errors, filler, casual language and "
+    "imperfect speaker labels), and optionally a pre-meeting agenda. Produce polished, "
+    "specific, well-structured notes by calling the record_meeting_notes tool.\n\n"
+    "Quality bar — match a great human notetaker:\n"
+    "- BE SPECIFIC: capture exact figures, names, dates, decisions and rationale that were "
+    "actually said. Concrete details over vague generalities.\n"
+    "- Organise the body into topic SECTIONS with short headings (by project/theme), each "
+    "with detailed bullets. Use **markdown bold** for key figures and decisions in bullets.\n"
+    "- ACTION ITEMS: concrete, self-contained next steps. Infer an owner from the speakers "
+    "when clear; use null if not — never invent a name. Set done=true ONLY if the item was "
+    "actually completed or resolved during the meeting; otherwise false.\n"
+    "- TITLE: one sentence, at most ~12 words, capturing the purpose/outcome.\n"
+    "- SUMMARY: 2-4 sentences of prose overview.\n"
+    "- If an AGENDA is provided, use it to structure and prioritise the sections and to add "
+    "context, but only record what the transcript actually supports — do not invent.\n"
+    "- Do not hallucinate. Ignore filler and banter. Keep it professional even if the "
+    "transcript is casual or contains profanity."
 )
 
 TOOL = {
@@ -41,9 +47,10 @@ def generate_notes(
     *,
     api_key: str,
     attendees: list[str] | None = None,
+    agenda: str = "",
     human_date: str = "",
     model: str = "claude-haiku-4-5",
-    max_tokens: int = 4000,
+    max_tokens: int = 8000,
 ) -> MeetingNotes:
     if not api_key:
         raise ValueError("No Anthropic API key configured.")
@@ -52,11 +59,14 @@ def generate_notes(
 
     client = anthropic.Anthropic(api_key=api_key)
     attendees_csv = ", ".join(attendees or []) or "(none entered)"
-    user = (
-        f"Meeting date: {human_date or '(unknown)'}\n"
-        f"Known attendees (entered during recording): {attendees_csv}\n\n"
-        f"Transcript:\n{transcript}"
-    )
+    parts = [
+        f"Meeting date: {human_date or '(unknown)'}",
+        f"Known attendees (entered during recording): {attendees_csv}",
+    ]
+    if (agenda or "").strip():
+        parts.append(f"\nPre-meeting agenda (context — structure the notes around this where relevant):\n{agenda.strip()}")
+    parts.append(f"\nTranscript:\n{transcript}")
+    user = "\n".join(parts)
 
     try:
         resp = client.messages.create(

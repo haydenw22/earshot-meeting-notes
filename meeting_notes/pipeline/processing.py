@@ -98,6 +98,7 @@ def process_recording(
                     merged["text"],
                     api_key=api_key,
                     attendees=m.attendees,
+                    agenda=m.agenda,
                     human_date=m.date_text,
                     model=cfg.anthropic_model,
                 )

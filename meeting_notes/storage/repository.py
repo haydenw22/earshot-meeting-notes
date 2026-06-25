@@ -21,6 +21,7 @@ class Meeting:
     date_text: str = ""
     date_iso: str = ""
     attendees: list[str] = field(default_factory=list)
+    agenda: str = ""
     transcript: Optional[str] = None
     notes_json: Optional[str] = None
     audio_dir: Optional[str] = None
@@ -55,6 +56,7 @@ class Meeting:
             date_text=d.get("date_text") or "",
             date_iso=d.get("date_iso") or "",
             attendees=attendees,
+            agenda=d.get("agenda") or "",
             transcript=d.get("transcript"),
             notes_json=d.get("notes_json"),
             audio_dir=d.get("audio_dir"),
@@ -73,7 +75,7 @@ class MeetingRepository:
     # Whitelist of writable columns — guards the dynamic UPDATE below against a
     # caller ever passing an unexpected (or untrusted) field name.
     _WRITABLE = frozenset({
-        "title", "date_text", "date_iso", "attendees", "transcript", "notes_json",
+        "title", "date_text", "date_iso", "attendees", "agenda", "transcript", "notes_json",
         "audio_dir", "headphones_mode", "duration_secs", "status", "error",
         "notion_page_id", "notion_synced_at",
     })
@@ -92,12 +94,12 @@ class MeetingRepository:
             pass
 
     # --- writes ---
-    def create(self, *, date_text: str, date_iso: str, attendees: list[str]) -> Meeting:
+    def create(self, *, date_text: str, date_iso: str, attendees: list[str], agenda: str = "") -> Meeting:
         with self._lock:
             cur = self.conn.execute(
-                "INSERT INTO meetings (date_text, date_iso, attendees, status) "
-                "VALUES (?, ?, ?, 'New')",
-                (date_text, date_iso, json.dumps(attendees)),
+                "INSERT INTO meetings (date_text, date_iso, attendees, agenda, status) "
+                "VALUES (?, ?, ?, ?, 'New')",
+                (date_text, date_iso, json.dumps(attendees), agenda),
             )
             self.conn.commit()
             mid = cur.lastrowid
