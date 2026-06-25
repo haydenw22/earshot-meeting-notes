@@ -12,6 +12,9 @@ import tempfile
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Isolate ALL app data to a throwaway dir so the test can never read or overwrite
+# the real %LOCALAPPDATA%\Earshot\config.json (which would wipe the user's key/URL).
+os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="earshot_test_")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402

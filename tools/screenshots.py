@@ -11,6 +11,11 @@ from pathlib import Path
 
 # NOTE: render with the native platform (real fonts) but invisibly via
 # WA_DontShowOnScreen — the offscreen platform renders Latin text as tofu boxes.
+# Isolate app data so this never reads/overwrites the real config.json.
+import os as _os
+import tempfile as _tempfile
+
+_os.environ["LOCALAPPDATA"] = _tempfile.mkdtemp(prefix="earshot_shots_")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import Qt  # noqa: E402
