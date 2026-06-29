@@ -51,11 +51,19 @@ def generate_notes(
     human_date: str = "",
     model: str = "claude-haiku-4-5",
     max_tokens: int = 8000,
+    extra_instructions: str = "",
 ) -> MeetingNotes:
     if not api_key:
         raise ValueError("No Anthropic API key configured.")
     if not transcript.strip():
         raise ValueError("Transcript is empty; nothing to summarise.")
+
+    system = SYSTEM_PROMPT
+    if (extra_instructions or "").strip():
+        system += (
+            "\n\nADDITIONAL INSTRUCTIONS FROM THE USER (follow these, they take priority on "
+            "style/format/emphasis):\n" + extra_instructions.strip()
+        )
 
     client = anthropic.Anthropic(api_key=api_key)
     attendees_csv = ", ".join(attendees or []) or "(none entered)"
@@ -72,7 +80,7 @@ def generate_notes(
         resp = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=[TOOL],
             tool_choice={"type": "tool", "name": "record_meeting_notes"},
             messages=[{"role": "user", "content": user}],

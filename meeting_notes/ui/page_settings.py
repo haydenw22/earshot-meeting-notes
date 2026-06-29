@@ -15,16 +15,20 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import __version__, paths
+from .. import __version__, changelog, paths
 from ..audio import devices as dev
 from ..capture import screen as screen_capture
 from ..transcription import whisper_client
+from .named_list import NamedListManager
 from .widgets import Card
 
 
@@ -79,11 +83,19 @@ class SettingsPage(QWidget):
         return card, lay
 
     def _tab(self) -> tuple[QWidget, QVBoxLayout]:
-        w = QWidget()
-        lay = QVBoxLayout(w)
+        outer_w = QWidget()
+        outer = QVBoxLayout(outer_w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        lay = QVBoxLayout(host)
         lay.setContentsMargins(2, 16, 2, 2)
         lay.setSpacing(16)
-        return w, lay
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
+        return outer_w, lay
 
     # ---------- General ----------
     def _general_tab(self) -> QWidget:
@@ -119,8 +131,82 @@ class SettingsPage(QWidget):
         srow.addStretch(1)
         scl.addLayout(srow)
         lay.addWidget(side_card)
+
+        home_card, hcl = self._card("Home page", "What appears on the home page.")
+        self.dashboard_toggle = QCheckBox("Show pending action items from past meetings")
+        self.dashboard_toggle.setChecked(self.cfg.show_dashboard)
+        hcl.addWidget(self.dashboard_toggle)
+        lay.addWidget(home_card)
+
+        ov_card, ovl = self._card(
+            "Recording overlay",
+            "A small always-on-top bar shown while recording: a timer plus two lights that glow "
+            "with your mic and the system audio. Drag it anywhere — it works across monitors.",
+        )
+        self.overlay_enabled = QCheckBox("Show the recording overlay while recording")
+        self.overlay_enabled.setChecked(self.cfg.overlay_enabled)
+        ovl.addWidget(self.overlay_enabled)
+        op_row = QHBoxLayout()
+        op_lbl = QLabel("Opacity")
+        op_lbl.setObjectName("Muted")
+        op_lbl.setFixedWidth(64)
+        self.overlay_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.overlay_opacity.setRange(40, 100)
+        self.overlay_opacity.setValue(int(round(self.cfg.overlay_opacity * 100)))
+        self.overlay_opacity_val = QLabel(f"{self.overlay_opacity.value()}%")
+        self.overlay_opacity_val.setObjectName("Faint")
+        self.overlay_opacity_val.setFixedWidth(44)
+        self.overlay_opacity.valueChanged.connect(
+            lambda v: self.overlay_opacity_val.setText(f"{v}%")
+        )
+        op_row.addWidget(op_lbl)
+        op_row.addWidget(self.overlay_opacity, 1)
+        op_row.addWidget(self.overlay_opacity_val)
+        ovl.addLayout(op_row)
+        reset_row = QHBoxLayout()
+        self.overlay_reset_btn = QPushButton("Reset position")
+        self.overlay_reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.overlay_reset_btn.clicked.connect(self._reset_overlay_position)
+        self.overlay_reset_label = QLabel("")
+        self.overlay_reset_label.setObjectName("Faint")
+        reset_row.addWidget(self.overlay_reset_btn)
+        reset_row.addWidget(self.overlay_reset_label)
+        reset_row.addStretch(1)
+        ovl.addLayout(reset_row)
+        lay.addWidget(ov_card)
+
+        wh_card, wcl = self._card(
+            "Webhook",
+            "POST each finished meeting (as JSON) to your own automation — Slack, Notion, "
+            "Zapier, n8n, a CRM, anything. Leave blank to disable. Note: this sends data off "
+            "your machine.",
+        )
+        wform = QFormLayout()
+        wform.setSpacing(10)
+        self.webhook_url = QLineEdit(self.cfg.webhook_url)
+        self.webhook_url.setPlaceholderText("https://…  (blank = off)")
+        self.webhook_when = QComboBox()
+        self.webhook_when.addItem("After the AI summary is done", "summary")
+        self.webhook_when.addItem("After transcription (raw transcript)", "transcript")
+        self.webhook_when.setCurrentIndex(1 if self.cfg.webhook_when == "transcript" else 0)
+        wform.addRow("URL", self.webhook_url)
+        wform.addRow("Send", self.webhook_when)
+        wcl.addLayout(wform)
+        lay.addWidget(wh_card)
+
         lay.addStretch(1)
         return w
+
+    def _reset_overlay_position(self) -> None:
+        from ..config import OVERLAY_AUTO_POS
+        self.cfg.overlay_pos_x = OVERLAY_AUTO_POS
+        self.cfg.overlay_pos_y = OVERLAY_AUTO_POS
+        self.cfg.save()
+        # if an overlay is currently up (recording), move it back immediately
+        ov = getattr(self.shell.record, "overlay", None)
+        if ov is not None:
+            ov._place()
+        self.overlay_reset_label.setText("Moved back to the top-right.")
 
     def _set_side(self, side: str) -> None:
         self.shell.set_sidebar_side(side)
@@ -207,7 +293,9 @@ class SettingsPage(QWidget):
         self.provider_combo = QComboBox()
         self.provider_combo.addItem("Home server (self-hosted Whisper)", "home")
         self.provider_combo.addItem("Online service (OpenAI / Groq)", "online")
-        self.provider_combo.setCurrentIndex(1 if self.cfg.transcription_provider == "online" else 0)
+        self.provider_combo.addItem("Deepgram", "deepgram")
+        _pi = self.provider_combo.findData(self.cfg.transcription_provider)
+        self.provider_combo.setCurrentIndex(_pi if _pi >= 0 else 0)
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self.language = QLineEdit(self.cfg.whisper_language)
         self.language.setPlaceholderText("en  (blank = auto-detect)")
@@ -244,6 +332,25 @@ class SettingsPage(QWidget):
         ocl.addWidget(hint)
         lay.addWidget(self.online_card)
 
+        self.deepgram_card, dcl = self._card(
+            "Deepgram", "Fast, accurate cloud transcription with no upload-size limit — good for long meetings."
+        )
+        dform = QFormLayout()
+        dform.setSpacing(10)
+        self.deepgram_key = QLineEdit(self.cfg.deepgram_api_key)
+        self.deepgram_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.deepgram_key.setPlaceholderText("Deepgram API key  (or set DEEPGRAM_API_KEY)")
+        self.deepgram_model = QLineEdit(self.cfg.deepgram_model)
+        self.deepgram_model.setPlaceholderText("nova-2")
+        dform.addRow("API key", self.deepgram_key)
+        dform.addRow("Model", self.deepgram_model)
+        dcl.addLayout(dform)
+        dhint = QLabel("Models: nova-2 (recommended, multilingual) · nova-3 (latest, English). Get a key at deepgram.com.")
+        dhint.setObjectName("Faint")
+        dhint.setWordWrap(True)
+        dcl.addWidget(dhint)
+        lay.addWidget(self.deepgram_card)
+
         test_row = QHBoxLayout()
         self.test_btn = QPushButton("Test connection")
         self.test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -261,17 +368,23 @@ class SettingsPage(QWidget):
         return self.provider_combo.currentData()
 
     def _on_provider_changed(self, *_) -> None:
-        online = self._provider() == "online"
-        self.home_card.setVisible(not online)
-        self.online_card.setVisible(online)
+        provider = self._provider()
+        self.home_card.setVisible(provider == "home")
+        self.online_card.setVisible(provider == "online")
+        self.deepgram_card.setVisible(provider == "deepgram")
 
     def _test(self) -> None:
         self.test_label.setText("Testing…")
         self.test_label.repaint()
-        if self._provider() == "online":
+        provider = self._provider()
+        if provider == "online":
             from ..transcription import openai_client
             key = self.online_key.text().strip() or os.environ.get("OPENAI_API_KEY", "")
             ok = openai_client.ping(self.online_base_url.text().strip(), key)
+        elif provider == "deepgram":
+            from ..transcription import deepgram_client
+            key = self.deepgram_key.text().strip() or os.environ.get("DEEPGRAM_API_KEY", "")
+            ok = deepgram_client.ping(key)
         else:
             ok = whisper_client.ping(self.whisper_url.text().strip())
         self.test_label.setText("✓ Connected" if ok else "✗ Could not connect")
@@ -306,6 +419,49 @@ class SettingsPage(QWidget):
         oform.addRow("OpenAI API key", self.online_key)
         ocl.addLayout(oform)
         lay.addWidget(oa_card)
+
+        ci_card, cicl = self._card(
+            "Custom instructions",
+            "Append your own guidance to every AI summary (tone, perspective, British English, "
+            "what to emphasise). Off by default — the standard notes are used.",
+        )
+        self.ci_toggle = QCheckBox("Use my custom instructions")
+        self.ci_toggle.setChecked(self.cfg.custom_instructions_enabled)
+        cicl.addWidget(self.ci_toggle)
+        self.ci_text = QPlainTextEdit(self.cfg.custom_instructions)
+        self.ci_text.setPlaceholderText(
+            "e.g. Use British English. Emphasise decisions and numbers. Refer to me as 'the vendor', not the buyer."
+        )
+        self.ci_text.setMinimumHeight(90)
+        cicl.addWidget(self.ci_text)
+        lay.addWidget(ci_card)
+
+        tpl_card, tplcl = self._card(
+            "Note templates",
+            "Per-meeting-type instructions you can choose on the recording screen (Sales call, "
+            "Standup, 1:1, …). The chosen template steers that meeting's notes.",
+        )
+        self.templates_mgr = NamedListManager(
+            self.cfg.templates, text_key="instructions",
+            name_ph="Template name (e.g. Sales call)",
+            text_ph="Instructions for this meeting type — e.g. 'Focus on objections, budget, next steps, and the decision-maker.'",
+        )
+        tplcl.addWidget(self.templates_mgr)
+        lay.addWidget(tpl_card)
+
+        act_card, actcl = self._card(
+            "Saved AI actions",
+            "Prompts you can run on a finished meeting from its page (e.g. 'Draft a follow-up "
+            "email'). Empty = use the built-in set.",
+        )
+        self.actions_mgr = NamedListManager(
+            self.cfg.ai_actions, text_key="prompt",
+            name_ph="Action name (e.g. Follow-up email)",
+            text_ph="The instruction — e.g. 'Draft a concise follow-up email with the action items.'",
+        )
+        actcl.addWidget(self.actions_mgr)
+        lay.addWidget(act_card)
+
         lay.addStretch(1)
         return w
 
@@ -322,8 +478,40 @@ class SettingsPage(QWidget):
         body.setWordWrap(True)
         cl.addWidget(body)
         lay.addWidget(card)
+
+        # What's new — the release history (single source of truth: meeting_notes.changelog)
+        wn_card, wncl = self._card("What's new", "Recent updates to Earshot.")
+        for rel in changelog.RELEASES:
+            head = QLabel(f"Version {rel.version}  ·  {rel.date}" + (f"  ·  {rel.title}" if rel.title else ""))
+            head.setObjectName("H3")
+            head.setContentsMargins(0, 10, 0, 2)
+            wncl.addWidget(head)
+            multi = len(rel.sections) > 1
+            for heading, bullets in rel.sections:
+                if heading and (multi or heading.lower() != "added"):
+                    sh = QLabel(heading)
+                    sh.setObjectName("Faint")
+                    wncl.addWidget(sh)
+                for b in bullets:
+                    wncl.addWidget(self._changelog_bullet(b))
+        lay.addWidget(wn_card)
+
         lay.addStretch(1)
         return w
+
+    def _changelog_bullet(self, text: str) -> QWidget:
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(2, 0, 0, 0)
+        rl.setSpacing(8)
+        dot = QLabel("•")
+        dot.setObjectName("Muted")
+        rl.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+        lbl = QLabel(text)
+        lbl.setObjectName("Muted")
+        lbl.setWordWrap(True)
+        rl.addWidget(lbl, 1)
+        return row
 
     # ---------- theme ----------
     def _set_theme(self, mode: str) -> None:
@@ -342,6 +530,8 @@ class SettingsPage(QWidget):
         self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
         self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
         self.cfg.online_api_key = self.online_key.text().strip()
+        self.cfg.deepgram_api_key = self.deepgram_key.text().strip()
+        self.cfg.deepgram_model = self.deepgram_model.text().strip() or "nova-2"
         self.cfg.anthropic_api_key = self.api_key.text().strip()
         self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
         self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
@@ -349,7 +539,21 @@ class SettingsPage(QWidget):
         self.cfg.mic_device_name = self.mic_combo.currentData()
         self.cfg.loopback_device_name = self.them_combo.currentData()
         self.cfg.screen_monitor = self.monitor_combo.currentData() or 1
+        # automation + AI customisation + home + overlay
+        self.cfg.show_dashboard = self.dashboard_toggle.isChecked()
+        self.cfg.overlay_enabled = self.overlay_enabled.isChecked()
+        self.cfg.overlay_opacity = self.overlay_opacity.value() / 100.0
+        ov = getattr(self.shell.record, "overlay", None)
+        if ov is not None:
+            ov.set_opacity(self.cfg.overlay_opacity)
+        self.cfg.webhook_url = self.webhook_url.text().strip()
+        self.cfg.webhook_when = self.webhook_when.currentData() or "summary"
+        self.cfg.custom_instructions_enabled = self.ci_toggle.isChecked()
+        self.cfg.custom_instructions = self.ci_text.toPlainText().strip()
+        self.cfg.templates = self.templates_mgr.items()
+        self.cfg.ai_actions = self.actions_mgr.items()
         self.cfg.save()
+        self.shell.home.refresh()  # reflect the dashboard toggle immediately
         self.save_btn.setText("Saved ✓")
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1400, lambda: self.save_btn.setText("Save changes"))

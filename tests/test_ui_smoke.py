@@ -36,11 +36,17 @@ NOTES = (
 def main() -> int:
     app = QApplication.instance() or QApplication([])
     cfg = Config()
+    # exercise the new customisation surfaces
+    cfg.templates = [{"name": "Sales call", "instructions": "Focus on objections."}]
+    cfg.ai_actions = [{"name": "Follow-up email", "prompt": "Draft an email."}]
+    cfg.show_dashboard = True
     tmp = tempfile.mkdtemp()
     repo = MeetingRepository(dbmod.connect(Path(tmp) / "ui.db"))
-    m = repo.create(date_text="25th June 2026", date_iso="2026-06-25", attendees=["Hayden"])
-    repo.update(m.id, title="Demo meeting", status="Done",
-                transcript="[00:00] Me: hello\n[00:02] Them: hi", notes_json=NOTES)
+    m = repo.create(date_text="25th June 2026", date_iso="2026-06-25", attendees=["Hayden"],
+                    template="Sales call")
+    repo.update(m.id, title="Demo meeting", status="Done", duration_secs=120,
+                transcript="[00:00] Me: hello there\n[00:02] Them: hi", notes_json=NOTES,
+                bookmarks=[{"ms": 4000, "label": ""}, {"ms": 60000, "label": ""}])
 
     theme = ThemeController(cfg)
     theme.apply()
@@ -49,8 +55,34 @@ def main() -> int:
     app.processEvents()
 
     shell.show_record(); app.processEvents()
+    # offscreen never "shows" the window, so check the explicit hidden flag, not isVisible()
+    assert not shell.record.template_box.isHidden(), "template selector should show when templates exist"
+    assert shell.record.template_combo.count() >= 2, "template combo should list General + templates"
+
     shell.open_meeting(m.id); app.processEvents()
+    assert not shell.detail.bookmarks_host.isHidden(), "bookmark chips should show"
+    assert shell.detail.action_combo.count() >= 1, "AI action combo should be populated"
+    shell.detail._jump_fraction(0.5); app.processEvents()      # bookmark jump
+    shell.show_home(); app.processEvents()
+    assert shell.home.cfg.show_dashboard       # dashboard enabled; pending "Write docs" renders
+
+    # full-text search across content (not just titles)
+    shell._filter_list("objection")            # no body match — must not crash
+    shell._filter_list("hello"); app.processEvents()
+
+    # settings save round-trips the new fields
     shell.show_settings(); app.processEvents()
+    s = shell.settings
+    s.dashboard_toggle.setChecked(False)
+    s.webhook_url.setText("https://example.com/hook")
+    s.ci_toggle.setChecked(True)
+    s.ci_text.setPlainText("Use British English.")
+    s._save(); app.processEvents()
+    reloaded = Config.load()
+    assert reloaded.show_dashboard is False
+    assert reloaded.webhook_url == "https://example.com/hook"
+    assert reloaded.custom_instructions == "Use British English."
+
     theme.toggle(); app.processEvents()      # light -> dark, refresh all pages
     shell.show_home(); app.processEvents()
     assert theme.mode == "dark"

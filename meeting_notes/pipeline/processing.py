@@ -88,49 +88,103 @@ def process_recording(
             me_json, them_json, dedupe=not m.headphones_mode
         )
         repo.update(meeting_id, transcript=merged["text"])
+        if cfg.webhook_when == "transcript":
+            _fire_webhook(repo, meeting_id, cfg, progress)
 
-        # 5. Summarise with Haiku (if a key is configured).
-        api_key = cfg.resolved_anthropic_key()
-        if summarize and api_key and merged["text"].strip():
-            repo.update(meeting_id, status="Summarizing")
-            progress("Writing notes")
-            try:
-                notes = anthropic_client.generate_notes(
-                    merged["text"],
-                    api_key=api_key,
-                    attendees=m.attendees,
-                    agenda=m.agenda,
-                    human_date=m.date_text,
-                    model=cfg.anthropic_model,
-                )
-            except Exception as note_err:
-                # The transcript is already saved — don't fail the whole recording
-                # just because note generation failed; let the user re-summarise.
-                repo.update(
-                    meeting_id,
-                    title=(m.title or f"Meeting — {m.date_text}"),
-                    status="Transcribed",
-                    error=f"Notes failed: {note_err}",
-                )
-                progress(f"Transcribed — notes failed ({note_err})")
-                return
-            repo.update(
-                meeting_id,
-                title=notes.title,
-                notes_json=notes.model_dump_json(),
-                attendees=notes.attendees or m.attendees,
-                status="Done",
-                error=None,
+        # 5. Summarise (+ webhook on completion).
+        _summarise(repo, meeting_id, cfg, m, merged["text"], summarize, progress)
+    except Exception as e:
+        repo.update(meeting_id, status="Error", error=str(e))
+        raise
+
+
+def _summarise(repo, meeting_id, cfg, m, transcript: str, summarize: bool, progress) -> None:
+    """Shared summary step for recordings and imports."""
+    api_key = cfg.resolved_anthropic_key()
+    if summarize and api_key and transcript.strip():
+        repo.update(meeting_id, status="Summarizing")
+        progress("Writing notes")
+        try:
+            notes = anthropic_client.generate_notes(
+                transcript,
+                api_key=api_key,
+                attendees=m.attendees,
+                agenda=m.agenda,
+                human_date=m.date_text,
+                model=cfg.anthropic_model,
+                extra_instructions=cfg.notes_instructions(m.template),
             )
-            progress("Done")
-        else:
-            # No key: stop after transcription with a placeholder title.
+        except Exception as note_err:
             repo.update(
                 meeting_id,
                 title=(m.title or f"Meeting — {m.date_text}"),
                 status="Transcribed",
+                error=f"Notes failed: {note_err}",
             )
-            progress("Transcribed (no Anthropic key — notes skipped)")
+            progress(f"Transcribed — notes failed ({note_err})")
+            if cfg.webhook_when == "summary":
+                _fire_webhook(repo, meeting_id, cfg, progress)
+            return
+        repo.update(
+            meeting_id,
+            title=notes.title,
+            notes_json=notes.model_dump_json(),
+            attendees=notes.attendees or m.attendees,
+            status="Done",
+            error=None,
+        )
+        progress("Done")
+    else:
+        repo.update(meeting_id, title=(m.title or f"Meeting — {m.date_text}"), status="Transcribed")
+        progress("Transcribed" if api_key else "Transcribed (no Anthropic key — notes skipped)")
+    if cfg.webhook_when == "summary":
+        _fire_webhook(repo, meeting_id, cfg, progress)
+
+
+def _fire_webhook(repo, meeting_id, cfg, progress) -> None:
+    if not (cfg.webhook_url or "").strip():
+        return
+    try:
+        from ..integrations import webhook
+        webhook.send(cfg.webhook_url, webhook.build_payload(repo.get(meeting_id)))
+        progress("Sent to webhook")
+    except Exception as e:  # never fail the pipeline because a webhook is down
+        progress(f"Webhook failed: {e}")
+
+
+def _fmt_ts(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    mnt, s = divmod(rem, 60)
+    return f"{h:d}:{mnt:02d}:{s:02d}" if h else f"{mnt:02d}:{s:02d}"
+
+
+def _single_speaker_transcript(result: dict) -> str:
+    lines = []
+    for seg in result.get("segments") or []:
+        text = (seg.get("text") or "").strip()
+        if text:
+            lines.append(f"[{_fmt_ts(float(seg.get('start') or 0))}] {text}")
+    if not lines and (result.get("text") or "").strip():
+        return result["text"].strip()
+    return "\n".join(lines)
+
+
+def process_imported_file(repo, meeting_id, cfg, file_path: str, *, progress=None, summarize: bool = True) -> None:
+    """Transcribe an imported audio/video file (single speaker) and summarise it."""
+    progress = progress or (lambda _m: None)
+    m = repo.get(meeting_id)
+    try:
+        repo.update(meeting_id, status="Transcribing", error=None)
+        progress("Transcribing file")
+        result = transcription_service.transcribe(file_path, cfg)
+        text = _single_speaker_transcript(result)
+        if not text.strip():
+            raise ValueError("No speech found in the file.")
+        repo.update(meeting_id, transcript=text)
+        if cfg.webhook_when == "transcript":
+            _fire_webhook(repo, meeting_id, cfg, progress)
+        _summarise(repo, meeting_id, cfg, m, text, summarize, progress)
     except Exception as e:
         repo.update(meeting_id, status="Error", error=str(e))
         raise

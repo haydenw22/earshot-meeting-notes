@@ -144,6 +144,14 @@ class Shell(QMainWindow):
         self.new_btn.clicked.connect(self.show_record)
         lay.addWidget(self.new_btn)
 
+        # import an existing recording
+        self.import_btn = QPushButton("  Import file")
+        self.import_btn.setProperty("variant", "ghost")
+        self.import_btn.setMinimumHeight(38)
+        self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.import_btn.clicked.connect(self._import_file)
+        lay.addWidget(self.import_btn)
+
         # search
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search meetings…")
@@ -221,6 +229,65 @@ class Shell(QMainWindow):
         self.stack.setCurrentWidget(self.detail)
         self._set_active("none")
 
+    # ---------- import an existing file ----------
+    def _import_file(self) -> None:
+        import os
+        import shutil
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from .. import paths
+        from ..util.dates import today_pair
+        from .workers import FuncWorker
+
+        path, _sel = QFileDialog.getOpenFileName(
+            self, "Import audio or video file", "",
+            "Media files (*.mp3 *.wav *.m4a *.mp4 *.mov *.aac *.flac *.ogg *.opus *.webm *.mkv);;All files (*.*)",
+        )
+        if not path:
+            return
+
+        human, iso = today_pair()
+        base = os.path.splitext(os.path.basename(path))[0]
+        meeting = self.repo.create(date_text=human, date_iso=iso, attendees=[], agenda="")
+        self.repo.update(meeting.id, title=f"Imported — {base}")
+        mdir = paths.meeting_dir(meeting.id)
+        os.makedirs(mdir, exist_ok=True)
+        dest = os.path.join(mdir, "import" + os.path.splitext(path)[1].lower())
+        try:
+            shutil.copy2(path, dest)
+        except OSError as e:
+            self.repo.delete(meeting.id)
+            QMessageBox.critical(self, "Import failed", f"Could not copy the file: {e}")
+            return
+        self.repo.update(meeting.id, audio_dir=mdir)
+        self.notify_data_changed()
+        self.open_meeting(meeting.id)
+
+        repo, cfg, mid = self.repo, self.cfg, meeting.id
+
+        def job(progress):
+            from ..pipeline.processing import process_imported_file
+            process_imported_file(repo, mid, cfg, dest, progress=progress, summarize=cfg.auto_summary)
+            return mid
+
+        self._import_worker = FuncWorker(job)
+        self._import_worker.progress.connect(
+            lambda msg, m=mid: self.detail.status_label.setText(msg) if self.detail.meeting_id == m else None
+        )
+        self._import_worker.done.connect(lambda _r, m=mid: self._on_import_done(m))
+        self._import_worker.failed.connect(self._on_import_failed)
+        self._import_worker.start()
+
+    def _on_import_done(self, mid: int) -> None:
+        self.notify_data_changed()
+        if self.detail.meeting_id == mid:
+            self.detail.refresh()
+
+    def _on_import_failed(self, msg: str) -> None:
+        self.notify_data_changed()
+        QMessageBox.critical(self, "Import failed", msg)
+
     # ---------- data + theme ----------
     def notify_data_changed(self) -> None:
         self._rebuild_list()
@@ -237,10 +304,20 @@ class Shell(QMainWindow):
         self._filter_list(self.search.text())
 
     def _filter_list(self, text: str) -> None:
-        text = (text or "").lower()
+        text = (text or "").strip()
+        if not text:
+            for i in range(self.meeting_list.count()):
+                self.meeting_list.item(i).setHidden(False)
+            return
+        # full-text match across transcript + notes + attendees + agenda, plus
+        # a plain title substring so partial words still narrow the list live.
+        match_ids = set(self.repo.search(text))
+        low = text.lower()
         for i in range(self.meeting_list.count()):
             item = self.meeting_list.item(i)
-            item.setHidden(bool(text) and text not in item.text().lower())
+            mid = item.data(Qt.ItemDataRole.UserRole)
+            visible = (mid in match_ids) or (low in item.text().lower())
+            item.setHidden(not visible)
 
     def _on_list_click(self, item: QListWidgetItem) -> None:
         mid = item.data(Qt.ItemDataRole.UserRole)
@@ -265,6 +342,7 @@ class Shell(QMainWindow):
         self.logo.setPixmap(logo.logo_pixmap(34))
         self.logo.setStyleSheet("")
         self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
+        self.import_btn.setIcon(icons.icon("upload", self.theme.color("text_muted"), 16))
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
         self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))
         self.settings_btn.setIcon(icons.icon("settings", self.theme.color("text_muted"), 18))
@@ -283,4 +361,5 @@ class Shell(QMainWindow):
             ) != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self.record._hide_overlay()  # don't leave the floating overlay behind
         event.accept()

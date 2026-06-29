@@ -13,11 +13,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -27,9 +31,10 @@ from PySide6.QtWidgets import (
 )
 
 from ..capture import screen as screen_capture
+from ..util import stats as _stats
 
 from ..storage.repository import Meeting
-from .widgets import Card, status_chip
+from .widgets import Card, make_chip, status_chip
 from .workers import FuncWorker
 
 
@@ -106,7 +111,20 @@ class DetailPage(QWidget):
         self.notes_lay.setSpacing(8)
         self.notes_lay.addStretch(1)
         self.notes_scroll.setWidget(self.notes_host)
+
+        # Transcript tab — bookmark jump-chips above the text
+        transcript_tab = QWidget()
+        tt = QVBoxLayout(transcript_tab)
+        tt.setContentsMargins(8, 8, 8, 8)
+        tt.setSpacing(8)
+        self.bookmarks_host = QWidget()
+        self.bookmarks_row = QHBoxLayout(self.bookmarks_host)
+        self.bookmarks_row.setContentsMargins(4, 0, 4, 0)
+        self.bookmarks_row.setSpacing(6)
         self.transcript_view = QTextBrowser()
+        tt.addWidget(self.bookmarks_host)
+        tt.addWidget(self.transcript_view, 1)
+
         # Screen tab — captured screenshots (hidden when there are none)
         self.screen_scroll = QScrollArea()
         self.screen_scroll.setWidgetResizable(True)
@@ -118,7 +136,7 @@ class DetailPage(QWidget):
         self.screen_scroll.setWidget(self.screen_host)
 
         self.tabs.addTab(self.notes_scroll, "Notes")
-        self.tabs.addTab(self.transcript_view, "Transcript")
+        self.tabs.addTab(transcript_tab, "Transcript")
         self._screen_tab_index = self.tabs.addTab(self.screen_scroll, "Screen")
         cl.addWidget(self.tabs)
         root.addWidget(card, 1)
@@ -126,6 +144,20 @@ class DetailPage(QWidget):
         self.status_label = QLabel("")
         self.status_label.setObjectName("Muted")
         root.addWidget(self.status_label)
+
+        # AI action runner (the prompt workbench)
+        ai_row = QHBoxLayout()
+        ai_row.setSpacing(8)
+        ai_lbl = QLabel("AI action:")
+        ai_lbl.setObjectName("Muted")
+        self.action_combo = QComboBox()
+        self.run_action_btn = QPushButton("Run")
+        self.run_action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_action_btn.clicked.connect(self._run_ai_action)
+        ai_row.addWidget(ai_lbl)
+        ai_row.addWidget(self.action_combo, 1)
+        ai_row.addWidget(self.run_action_btn)
+        root.addLayout(ai_row)
 
         btns = QHBoxLayout()
         btns.setSpacing(10)
@@ -179,10 +211,13 @@ class DetailPage(QWidget):
         self._render_notes(m)
         self.transcript_view.setPlainText(m.transcript or "No transcript yet.")
         self._render_screenshots(m)
+        self._render_bookmarks(m)
+        self._populate_actions()
         self.copy_btn.setEnabled(bool(m.notes))
         self.resummarise_btn.setEnabled(bool(m.transcript))
         self.reprocess_btn.setEnabled(bool(m.audio_dir))
         self.folder_btn.setEnabled(bool(m.audio_dir))
+        self.run_action_btn.setEnabled(bool(m.transcript or m.notes))
         self.apply_theme()
 
     def _meta_chip(self, text: str):
@@ -260,6 +295,12 @@ class DetailPage(QWidget):
             s = QLabel(notes["summary"])
             s.setWordWrap(True)
             self.notes_lay.addWidget(s)
+
+        tt = _stats.talk_time(m.transcript or "")
+        if tt["has_speakers"]:
+            stat = QLabel(f"Talk-time (approx) — you {tt['me_pct']}%  ·  them {tt['them_pct']}%   ·   {tt['total_words']} words")
+            stat.setObjectName("Faint")
+            self.notes_lay.addWidget(stat)
 
         actions = notes.get("action_items") or []
         if actions:
@@ -341,6 +382,111 @@ class DetailPage(QWidget):
             notes["action_items"] = actions
             self.repo.update(self.meeting_id, notes_json=json.dumps(notes))
 
+    # ---------- bookmarks ----------
+    def _render_bookmarks(self, m) -> None:
+        while self.bookmarks_row.count():
+            item = self.bookmarks_row.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        bms = m.bookmarks or []
+        self.bookmarks_host.setVisible(bool(bms))
+        if not bms:
+            return
+        lbl = QLabel("Bookmarks:")
+        lbl.setObjectName("Muted")
+        self.bookmarks_row.addWidget(lbl)
+        dur_ms = int((m.duration_secs or 0) * 1000) or 1
+        for b in bms:
+            ms = int(b.get("ms", 0))
+            chip = QPushButton(self._fmt_ms(ms))
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setStyleSheet(
+                f"QPushButton{{background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};"
+                f"border:none; border-radius:9px; padding:3px 10px; font-size:12px; font-weight:600;}}"
+            )
+            chip.clicked.connect(lambda _=False, f=min(1.0, ms / dur_ms): self._jump_fraction(f))
+            self.bookmarks_row.addWidget(chip)
+        self.bookmarks_row.addStretch(1)
+
+    def _jump_fraction(self, frac: float) -> None:
+        self.tabs.setCurrentIndex(1)  # Transcript
+        sb = self.transcript_view.verticalScrollBar()
+        sb.setValue(int(frac * sb.maximum()))
+
+    # ---------- AI actions (prompt workbench) ----------
+    def _populate_actions(self) -> None:
+        self.action_combo.clear()
+        for a in self.cfg.effective_ai_actions():
+            self.action_combo.addItem(a.get("name") or "(unnamed)", a.get("prompt") or "")
+
+    def _run_ai_action(self) -> None:
+        if self.meeting_id is None:
+            return
+        prompt = self.action_combo.currentData()
+        if not prompt:
+            QMessageBox.warning(self, "No action", "Pick an AI action (manage them in Settings → AI).")
+            return
+        if not self.cfg.resolved_anthropic_key():
+            QMessageBox.warning(self, "No API key", "Add an Anthropic API key in Settings → AI first.")
+            return
+        name = self.action_combo.currentText()
+        repo, cfg, mid = self.repo, self.cfg, self.meeting_id
+        self.status_label.setText(f"Running '{name}'…")
+        self.run_action_btn.setEnabled(False)
+
+        def job(_p):
+            from ..notes import actions, render
+            m = repo.get(mid)
+            notes_text = render.to_plaintext(m.notes) if m.notes else ""
+            return actions.run_action(
+                prompt, transcript=m.transcript or "", notes_text=notes_text,
+                title=m.title or "", api_key=cfg.resolved_anthropic_key(), model=cfg.anthropic_model,
+            )
+
+        self.worker = FuncWorker(job)
+        self.worker.done.connect(lambda text, n=name: self._on_action_done(text, n))
+        self.worker.failed.connect(self._on_action_failed)
+        self.worker.start()
+
+    def _on_action_done(self, text: str, name: str) -> None:
+        self.status_label.setText("")
+        self.run_action_btn.setEnabled(True)
+        self._show_result(name, text)
+
+    def _on_action_failed(self, msg: str) -> None:
+        self.status_label.setText(f"Error: {msg}")
+        self.run_action_btn.setEnabled(True)
+        QMessageBox.critical(self, "AI action failed", msg)
+
+    def _show_result(self, title: str, text: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setMinimumSize(560, 460)
+        v = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(text)
+        edit.setReadOnly(True)
+        v.addWidget(edit)
+        bar = QHBoxLayout()
+        copy = QPushButton("Copy")
+        copy.setProperty("variant", "primary")
+        copy.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def do_copy():
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(text)
+            copy.setText("Copied ✓")
+
+        copy.clicked.connect(do_copy)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        bar.addWidget(copy)
+        bar.addStretch(1)
+        bar.addWidget(close)
+        v.addLayout(bar)
+        dlg.exec()
+
     # ---------- screenshots ----------
     def _render_screenshots(self, m) -> None:
         self._screen_meeting = m
@@ -405,6 +551,7 @@ class DetailPage(QWidget):
         self.reprocess_btn.setIcon(self.theme.icon("refresh", "text_muted", 16))
         self.folder_btn.setIcon(self.theme.icon("folder", "text_muted", 16))
         self.delete_btn.setIcon(self.theme.icon("trash", "danger", 16))
+        self.run_action_btn.setIcon(self.theme.icon("sparkles", "text_muted", 15))
 
     # ---------- actions ----------
     def _run(self, job, label: str) -> None:
@@ -442,6 +589,7 @@ class DetailPage(QWidget):
             notes = anthropic_client.generate_notes(
                 m.transcript or "", api_key=cfg.resolved_anthropic_key(),
                 attendees=m.attendees, agenda=m.agenda, human_date=m.date_text, model=cfg.anthropic_model,
+                extra_instructions=cfg.notes_instructions(m.template),
             )
             repo.update(mid, title=notes.title, notes_json=notes.model_dump_json(),
                         attendees=notes.attendees or m.attendees, status="Done")

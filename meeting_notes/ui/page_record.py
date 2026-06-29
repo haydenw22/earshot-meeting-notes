@@ -5,15 +5,18 @@ on stop, then opens the finished meeting.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -28,8 +31,15 @@ from ..capture.screen import ScreenRecorder
 from ..paths import meeting_dir
 from ..util.dates import today_pair
 from . import icons
+from .overlay import RecordingOverlay
 from .widgets import Card
 from .workers import FuncWorker
+
+# A channel whose RMS level never crosses this is treated as silent (a muted mic
+# or mis-routed system audio reads ~0; even quiet speech/room tone reads higher).
+_INPUT_ACTIVE_LEVEL = 0.04
+# Don't warn until the recording has had this long to actually produce sound.
+_INPUT_GRACE_SECS = 10.0
 
 
 def _parse_attendees(text: str) -> list[str]:
@@ -48,6 +58,10 @@ class RecordPage(QWidget):
         self.worker: FuncWorker | None = None
         self._screen_rec: ScreenRecorder | None = None
         self._record_t0 = 0.0
+        self._bookmarks: list[dict] = []
+        self._mic_seen = False   # has the mic channel ever produced real audio?
+        self._them_seen = False  # has the system-audio channel?
+        self.overlay: RecordingOverlay | None = None
         self._human_date, self._iso_date = today_pair()
         self._build()
 
@@ -92,6 +106,17 @@ class RecordPage(QWidget):
         self.attendees.setPlaceholderText("Add names, comma-separated — you can keep editing during the call")
         self.attendees.editingFinished.connect(self._persist_attendees)
         sl.addWidget(self.attendees)
+        # notes template (hidden unless the user has created templates)
+        self.template_box = QWidget()
+        tbox = QVBoxLayout(self.template_box)
+        tbox.setContentsMargins(0, 0, 0, 0)
+        tbox.setSpacing(6)
+        tpl_lbl = QLabel("Notes template")
+        tpl_lbl.setObjectName("H3")
+        self.template_combo = QComboBox()
+        tbox.addWidget(tpl_lbl)
+        tbox.addWidget(self.template_combo)
+        sl.addWidget(self.template_box)
         root.addWidget(sess)
 
         # agenda card — pre-meeting notes that stay on screen while recording and
@@ -142,15 +167,36 @@ class RecordPage(QWidget):
         self.them_meter = self._meter("them")
         ll.addLayout(self._meter_row("You", self.mic_meter))
         ll.addLayout(self._meter_row("Them", self.them_meter))
+        # amber warning shown when a channel stays completely silent
+        self.input_warning = QFrame()
+        self.input_warning.setObjectName("WarnBanner")
+        iw = QHBoxLayout(self.input_warning)
+        iw.setContentsMargins(12, 9, 12, 9)
+        iw.setSpacing(9)
+        self.input_warning_icon = QLabel()
+        self.input_warning_text = QLabel("")
+        self.input_warning_text.setObjectName("WarnText")
+        self.input_warning_text.setWordWrap(True)
+        iw.addWidget(self.input_warning_icon, 0, Qt.AlignmentFlag.AlignTop)
+        iw.addWidget(self.input_warning_text, 1)
+        self.input_warning.setVisible(False)
+        ll.addWidget(self.input_warning)
         self.timer_label = QLabel("00:00")
         self.timer_label.setObjectName("H2")
         self.timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ll.addWidget(self.timer_label)
+        self.bookmark_btn = QPushButton("  Bookmark this moment  (Ctrl+B)")
+        self.bookmark_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.bookmark_btn.clicked.connect(self._add_bookmark)
+        ll.addWidget(self.bookmark_btn)
+        self.bookmark_count = QLabel("")
+        self.bookmark_count.setObjectName("Faint")
+        self.bookmark_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ll.addWidget(self.bookmark_count)
         self.live.setVisible(False)
         root.addWidget(self.live)
 
         # record control
-        from PySide6.QtWidgets import QPushButton
         self.record_btn = QPushButton("Start recording")
         self.record_btn.setProperty("variant", "danger")
         self.record_btn.setMinimumHeight(52)
@@ -168,7 +214,35 @@ class RecordPage(QWidget):
         self.poll = QTimer(self)
         self.poll.setInterval(100)
         self.poll.timeout.connect(self._on_poll)
+        self._bm_shortcut = QShortcut(QKeySequence("Ctrl+B"), self)
+        self._bm_shortcut.activated.connect(self._add_bookmark)
         self.apply_theme()
+
+    # ---------- recording overlay ----------
+    def _show_overlay(self) -> None:
+        if not self.cfg.overlay_enabled:
+            return
+        if self.overlay is None:
+            self.overlay = RecordingOverlay(self.cfg)
+        self.overlay.set_opacity(self.cfg.overlay_opacity)
+        self.overlay.update_time(0)
+        self.overlay.update_levels(0.0, 0.0)
+        self.overlay.show_overlay()
+
+    def _hide_overlay(self) -> None:
+        if self.overlay is not None:
+            self.overlay.close_overlay()
+            self.overlay = None
+
+    def _add_bookmark(self) -> None:
+        if not (self.recorder and self.recorder.running):
+            return
+        ms = int(self.recorder.elapsed * 1000)
+        self._bookmarks.append({"ms": ms, "label": ""})
+        secs = ms // 1000
+        self.bookmark_count.setText(f"{len(self._bookmarks)} bookmark(s) · last at {secs // 60:02d}:{secs % 60:02d}")
+        if self.meeting_id is not None:
+            self.repo.update(self.meeting_id, bookmarks=self._bookmarks)
 
     def _field_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -196,6 +270,13 @@ class RecordPage(QWidget):
         is_rec = bool(self.recorder and self.recorder.running)
         name = "stop" if is_rec else "record"
         self.record_btn.setIcon(self.theme.icon(name, "on_danger", 18))
+        self.bookmark_btn.setIcon(self.theme.icon("bookmark", "text", 16))
+        self.input_warning_icon.setPixmap(icons.pixmap("alert-triangle", self.theme.color("warning"), 18))
+        self.input_warning.setStyleSheet(
+            f"#WarnBanner{{background:{self.theme.color('warning_soft')};"
+            f"border:1px solid {self.theme.color('warning')}; border-radius:10px;}}"
+            f"#WarnText{{color:{self.theme.color('warning')}; font-weight:600; background:transparent;}}"
+        )
 
     # ---------- shown ----------
     def on_shown(self) -> None:
@@ -204,6 +285,13 @@ class RecordPage(QWidget):
         if not (self.recorder and self.recorder.running):
             self._load_devices()
             self.status_label.setText("")
+            templates = self.cfg.templates or []
+            self.template_box.setVisible(bool(templates))
+            if templates:
+                self.template_combo.clear()
+                self.template_combo.addItem("General (default)", "")
+                for t in templates:
+                    self.template_combo.addItem(t.get("name") or "(unnamed)", t.get("name") or "")
 
     def _load_devices(self) -> None:
         try:
@@ -251,8 +339,15 @@ class RecordPage(QWidget):
             return
         attendees = _parse_attendees(self.attendees.text())
         agenda = self.agenda.toPlainText().strip()
+        template = (self.template_combo.currentData() or "") if self.template_box.isVisible() else ""
+        self._bookmarks = []
+        self.bookmark_count.setText("")
+        self._mic_seen = False
+        self._them_seen = False
+        self.input_warning.setVisible(False)
         meeting = self.repo.create(
-            date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda
+            date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda,
+            template=template,
         )
         self.meeting_id = meeting.id
         self.repo.update(self.meeting_id, status="Recording", headphones_mode=self.headphones.isChecked())
@@ -280,6 +375,7 @@ class RecordPage(QWidget):
         self.status_label.setText("Recording… attendees stay editable.")
         self.shell.notify_data_changed()
         self.poll.start()
+        self._show_overlay()
         self.cfg.capture_screen = self.capture_screen.isChecked()
         self.cfg.save()
         self._maybe_start_screen()
@@ -310,10 +406,36 @@ class RecordPage(QWidget):
     def _on_poll(self) -> None:
         if not self.recorder:
             return
-        self.mic_meter.setValue(int(self.recorder.mic_level * 100))
-        self.them_meter.setValue(int(self.recorder.them_level * 100))
+        mic_level, them_level = self.recorder.mic_level, self.recorder.them_level
+        self.mic_meter.setValue(int(mic_level * 100))
+        self.them_meter.setValue(int(them_level * 100))
         secs = int(self.recorder.elapsed)
         self.timer_label.setText(f"{secs // 60:02d}:{secs % 60:02d}")
+        if mic_level > _INPUT_ACTIVE_LEVEL:
+            self._mic_seen = True
+        if them_level > _INPUT_ACTIVE_LEVEL:
+            self._them_seen = True
+        self._update_input_warning(self.recorder.elapsed)
+        if self.overlay is not None:
+            self.overlay.update_levels(mic_level, them_level)
+            self.overlay.update_time(self.recorder.elapsed)
+
+    def _update_input_warning(self, elapsed: float) -> None:
+        """Show an amber banner if a channel has produced no audio at all after the
+        grace period. Clears the moment sound is detected (so normal pauses don't trip it)."""
+        if elapsed < _INPUT_GRACE_SECS or (self._mic_seen and self._them_seen):
+            self.input_warning.setVisible(False)
+            return
+        if not self._mic_seen and not self._them_seen:
+            msg = ("No audio detected yet — we're not hearing your microphone or the other side. "
+                   "Check your mic and that the meeting audio is playing through the selected device.")
+        elif not self._mic_seen:
+            msg = "No sound from your microphone yet — check it isn't muted and the right input is selected above."
+        else:
+            msg = ("No sound from the other side yet — make sure the meeting audio is playing through the "
+                   "device selected under “Their audio”.")
+        self.input_warning_text.setText(msg)
+        self.input_warning.setVisible(True)
 
     def _persist_attendees(self) -> None:
         if self.meeting_id is not None:
@@ -322,6 +444,8 @@ class RecordPage(QWidget):
     def _stop(self) -> None:
         self.poll.stop()
         self._stop_screen()
+        self._hide_overlay()
+        self.input_warning.setVisible(False)
         self.record_btn.setEnabled(False)
         self.record_btn.setText("Processing…")
         self._persist_attendees()
@@ -359,6 +483,8 @@ class RecordPage(QWidget):
         self.mic_combo.setEnabled(True)
         self.them_combo.setEnabled(True)
         self.headphones.setEnabled(True)
+        self.input_warning.setVisible(False)
+        self._hide_overlay()
         self.live.setVisible(False)
         self.apply_theme()
 
@@ -367,6 +493,7 @@ class RecordPage(QWidget):
         self._reset_controls()
         self.attendees.clear()
         self.agenda.clear()  # fresh form for the next recording
+        self.bookmark_count.setText("")
         self.shell.notify_data_changed()
         self.shell.open_meeting(int(mid))
 

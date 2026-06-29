@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS meetings (
 );
 CREATE INDEX IF NOT EXISTS idx_meetings_date ON meetings(date_iso);
 CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
+
+-- Full-text search over each meeting's searchable text (kept in sync by the repo).
+CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(meeting_id UNINDEXED, body);
 """
 
 
@@ -47,6 +50,8 @@ def connect(path: Optional[Path] = None) -> sqlite3.Connection:
 # Columns added after v1 — applied to existing DBs via ALTER TABLE.
 _MIGRATIONS = {
     "agenda": "ALTER TABLE meetings ADD COLUMN agenda TEXT",
+    "template": "ALTER TABLE meetings ADD COLUMN template TEXT",
+    "bookmarks": "ALTER TABLE meetings ADD COLUMN bookmarks TEXT",
 }
 
 

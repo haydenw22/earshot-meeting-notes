@@ -32,6 +32,8 @@ LIGHT: dict[str, str] = {
     "danger_hover": "#DA362D",
     "danger_soft": "#FDECEA",
     "on_danger": "#FFFFFF",
+    "warning": "#B45309",       # caution (amber) — e.g. "no input detected"
+    "warning_soft": "#FEF3C7",
     "focus": "#6366F1",
     "scroll_thumb": "#D4D5E0",
     "shadow": "0,0,0",
@@ -56,6 +58,8 @@ DARK: dict[str, str] = {
     "danger_hover": "#F47169",
     "danger_soft": "#2A1B1C",
     "on_danger": "#FFFFFF",
+    "warning": "#FBBF24",       # caution (amber) — e.g. "no input detected"
+    "warning_soft": "#2A2410",
     "focus": "#7C82F2",
     "scroll_thumb": "#34364360",
 }
