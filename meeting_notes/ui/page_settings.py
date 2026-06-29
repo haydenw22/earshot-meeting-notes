@@ -316,6 +316,17 @@ class SettingsPage(QWidget):
         self.whisper_url.setPlaceholderText("http://<your-server-ip>:9000")
         hform.addRow("Server URL", self.whisper_url)
         hcl.addLayout(hform)
+        self.whisper_vad = QCheckBox("Skip silence (VAD) — faster transcription")
+        self.whisper_vad.setChecked(self.cfg.whisper_vad_filter)
+        hcl.addWidget(self.whisper_vad)
+        vad_hint = QLabel(
+            "Transcribes only speech and skips silent stretches — a big speed-up for dual-channel "
+            "recordings (each side is silent while the other talks). Needs the faster-whisper engine "
+            "on the server; ignored otherwise."
+        )
+        vad_hint.setObjectName("Faint")
+        vad_hint.setWordWrap(True)
+        hcl.addWidget(vad_hint)
         lay.addWidget(self.home_card)
 
         self.online_card, ocl = self._card("Online service", "Any OpenAI-compatible audio API. The API key is in the AI tab.")
@@ -527,6 +538,7 @@ class SettingsPage(QWidget):
         self.cfg.transcription_provider = self._provider()
         self.cfg.whisper_language = self.language.text().strip()
         self.cfg.whisper_url = self.whisper_url.text().strip()
+        self.cfg.whisper_vad_filter = self.whisper_vad.isChecked()
         self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
         self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
         self.cfg.online_api_key = self.online_key.text().strip()

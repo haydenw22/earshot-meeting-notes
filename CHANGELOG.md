@@ -4,6 +4,18 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-06-29 · Cleaner speaker attribution
+
+### Changed
+
+- Much better Me/Them separation when recording on speakers. Faint residual bleed of the other side into your mic was being transcribed and labelled as you; the crosstalk de-duper now uses time-windowed word containment (robust to run-on segments) and the mic-vs-system loudness, so the other side's words no longer show up as "Me" — while your own speech is kept even when it echoes theirs. (Headphones still give the cleanest result.)
+
+## [0.6.0] — 2026-06-29 · Faster local transcription
+
+### Added
+
+- Skip-silence (VAD) option for the home Whisper server: it transcribes only speech and skips silent stretches. Because each channel of a dual-channel recording is silent while the other side talks, this is a big speed-up. On by default — toggle it in Settings → Transcription (needs the faster-whisper engine on the server).
+
 ## [0.5.0] — 2026-06-26 · Recording overlay
 
 ### Added

@@ -36,6 +36,7 @@ def transcribe(audio_path: str | Path, cfg: Config, *, timeout: Optional[float] 
         base_url=cfg.whisper_url,
         language=cfg.whisper_language,
         word_timestamps=cfg.whisper_word_timestamps,
+        vad_filter=cfg.whisper_vad_filter,
         timeout=timeout,
     )
 

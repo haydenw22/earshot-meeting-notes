@@ -44,6 +44,7 @@ class Config:
     # home server
     whisper_url: str = DEFAULT_WHISPER_URL
     whisper_word_timestamps: bool = True
+    whisper_vad_filter: bool = True       # skip silence server-side (faster; needs faster-whisper engine)
     # online service (OpenAI-compatible: OpenAI, Groq, …)
     online_base_url: str = "https://api.openai.com/v1"
     online_api_key: str = ""

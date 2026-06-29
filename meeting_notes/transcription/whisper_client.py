@@ -44,6 +44,7 @@ def transcribe(
     base_url: str,
     language: str = "en",
     word_timestamps: bool = True,
+    vad_filter: bool = False,
     output: str = "json",
     timeout: Optional[float] = None,
 ) -> dict:
@@ -55,6 +56,10 @@ def transcribe(
         params["language"] = language
     if word_timestamps:
         params["word_timestamps"] = "true"
+    if vad_filter:
+        # server skips silent stretches (faster-whisper engine) — big win for our
+        # dual-channel recordings, where each channel is ~half silence.
+        params["vad_filter"] = "true"
 
     audio_path = Path(audio_path)
     try:

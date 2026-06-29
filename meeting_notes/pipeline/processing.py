@@ -32,6 +32,34 @@ def _read_mono(path: Path) -> np.ndarray:
     return data
 
 
+def _attach_channel_energy(me_json: dict, me_path: Path, them_path: Path) -> None:
+    """Tag each 'me' segment with its mic + system RMS over the segment's span.
+
+    Lets the merge tell genuine speech (mic dominant) from faint residual bleed
+    (system dominant). Best-effort: never fail transcription over a loudness calc.
+    """
+    try:
+        me, sr = sf.read(str(me_path), dtype="float32", always_2d=False)
+        them, _ = sf.read(str(them_path), dtype="float32", always_2d=False)
+    except Exception:
+        return
+    if me.ndim == 2:
+        me = me.mean(axis=1)
+    if them.ndim == 2:
+        them = them.mean(axis=1)
+
+    def _rms(a: np.ndarray, t0: float, t1: float) -> float:
+        i0, i1 = int(t0 * sr), int(t1 * sr)
+        seg = a[max(0, i0):max(i0 + 1, i1)]
+        return float(np.sqrt((seg ** 2).mean())) if len(seg) else 0.0
+
+    for s in me_json.get("segments") or []:
+        st = float(s.get("start") or 0.0)
+        en = float(s.get("end") or st)
+        s["me_rms"] = _rms(me, st, en)
+        s["them_rms"] = _rms(them, st, en)
+
+
 def _prep_clean_me(audio_dir: Path, headphones_mode: bool, progress: Progress) -> np.ndarray:
     me = _read_mono(audio_dir / writer.RAW_ME)
     if headphones_mode:
@@ -81,6 +109,11 @@ def process_recording(
         me_json = transcription_service.transcribe(me_16k, cfg)
         progress("Transcribing them")
         them_json = transcription_service.transcribe(them_16k, cfg)
+
+        # Annotate each 'me' segment with mic-vs-system loudness so the merge can
+        # distinguish your speech from faint bleed (only matters off headphones).
+        if not m.headphones_mode:
+            _attach_channel_energy(me_json, me_16k, them_16k)
 
         # 4. Merge into one speaker-labelled transcript.
         progress("Merging transcript")

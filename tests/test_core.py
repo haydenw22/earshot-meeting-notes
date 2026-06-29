@@ -62,6 +62,30 @@ def test_merge_crosstalk_dedupe():
     print("  crosstalk dedupe OK")
 
 
+def test_merge_crosstalk_runon_and_audio():
+    # run-on 'Them' line (multiple turns) — short 'Me' echoes inside it must drop,
+    # which a whole-string similarity ratio would miss (lengths differ wildly).
+    them = {"segments": [{"start": 10.0, "end": 16.0,
+                          "text": "we are sitting at five thousand and we have made one or two sales this year"}]}
+    me = {"segments": [{"start": 11.0, "end": 12.0, "text": "we are sitting at five thousand"}]}
+    assert len(merge_transcripts(me, them)["segments"]) == 1, "run-on bleed should be removed"
+
+    # same echo, but the mic clearly dominated -> you genuinely speaking -> keep
+    me_loud = {"segments": [{"start": 11.0, "end": 12.0, "text": "we are sitting at five thousand",
+                             "me_rms": 0.08, "them_rms": 0.01}]}
+    assert len(merge_transcripts(me_loud, them)["segments"]) == 2, "mic-dominant speech should be kept"
+
+    # same echo, mic faint vs system -> bleed -> drop
+    me_faint = {"segments": [{"start": 11.0, "end": 12.0, "text": "we are sitting at five thousand",
+                              "me_rms": 0.004, "them_rms": 0.02}]}
+    assert len(merge_transcripts(me_faint, them)["segments"]) == 1, "faint mic = bleed, drop"
+
+    # a genuine short backchannel that isn't in 'Them' is always kept
+    me_bc = {"segments": [{"start": 11.0, "end": 12.0, "text": "Okay sounds good"}]}
+    assert len(merge_transcripts(me_bc, them)["segments"]) == 2
+    print("  crosstalk run-on + audio-aware OK")
+
+
 def test_schema():
     schema = notes_tool_schema()
     assert schema["type"] == "object"
@@ -150,6 +174,7 @@ if __name__ == "__main__":
     test_dates()
     test_merge()
     test_merge_crosstalk_dedupe()
+    test_merge_crosstalk_runon_and_audio()
     test_schema()
     test_db()
     test_update_whitelist()
