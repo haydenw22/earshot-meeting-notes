@@ -9,7 +9,20 @@ from __future__ import annotations
 import traceback
 from typing import Callable
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
+
+# Strong references to every running worker. Callers keep workers in plain
+# attributes (self.worker = FuncWorker(...)); if that attribute is overwritten
+# while the old thread is still running, Python would GC a live QThread — which
+# aborts the process ("QThread: Destroyed while thread is still running").
+# Holding each worker here until it has truly finished removes that crash class
+# app-wide without changing any call site.
+_ACTIVE: set["FuncWorker"] = set()
+
+
+def active_count() -> int:
+    """Number of background workers still running (used by the close guard)."""
+    return len(_ACTIVE)
 
 
 class FuncWorker(QThread):
@@ -20,6 +33,16 @@ class FuncWorker(QThread):
     def __init__(self, fn: Callable[[Callable[[str], None]], object], parent=None):
         super().__init__(parent)
         self._fn = fn
+        # Queued => the release runs on the main event loop after the thread has
+        # fully finished, so the GC can never collect a still-running thread.
+        self.finished.connect(self._release, Qt.ConnectionType.QueuedConnection)
+
+    def start(self, *args) -> None:
+        _ACTIVE.add(self)
+        super().start(*args)
+
+    def _release(self) -> None:
+        _ACTIVE.discard(self)
 
     def run(self) -> None:
         try:

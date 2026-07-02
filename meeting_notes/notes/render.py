@@ -46,7 +46,9 @@ def to_html(notes: dict, *, title: str = "", date_text: str = "", attendees: Opt
             box = "&#9745;" if a.get("done") else "&#9744;"  # ☑ / ☐
             task = _html.escape(a.get("task") or "")
             owner = f" — <b>{_html.escape(a['owner'])}</b>" if a.get("owner") else ""
-            rows.append(f'<li style="list-style:none;">{box} {task}{owner}</li>')
+            sug = ('' if a.get("confirmed", True) or a.get("done")
+                   else ' <i style="color:#999;">(suggested)</i>')
+            rows.append(f'<li style="list-style:none;">{box} {task}{owner}{sug}</li>')
         parts.append(f'<ul style="padding-left:0;">{"".join(rows)}</ul>')
 
     for sec in notes.get("sections") or []:
@@ -74,7 +76,8 @@ def to_plaintext(notes: dict, *, title: str = "", date_text: str = "", attendees
         for a in actions:
             box = "☑" if a.get("done") else "☐"  # ☑ / ☐
             owner = f" — {a['owner']}" if a.get("owner") else ""
-            lines.append(f"  {box} {_strip_md(a.get('task') or '')}{owner}")
+            sug = "" if a.get("confirmed", True) or a.get("done") else "  (suggested)"
+            lines.append(f"  {box} {_strip_md(a.get('task') or '')}{owner}{sug}")
 
     for sec in notes.get("sections") or []:
         if sec.get("heading"):

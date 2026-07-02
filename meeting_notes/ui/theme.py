@@ -4,6 +4,11 @@ stylesheet built from them.
 One source of truth — every surface, text and accent colour is a token, so the
 two themes stay consistent (the dark-mode-pairing rule). Code that needs a raw
 colour (icons, shadows) reads `tokens()`; widgets get styled via `build_qss()`.
+
+Interaction states follow one matrix everywhere: rest → hover (surface shift) →
+pressed (darker) → focus (accent border, keyboard-visible) → disabled (faint,
+never invisible). Contrast targets: body text ≥ 4.5:1, secondary ≥ 3:1 in both
+modes.
 """
 from __future__ import annotations
 
@@ -11,15 +16,18 @@ from typing import Literal
 
 Mode = Literal["light", "dark"]
 
-FONT_FAMILY = '"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif'
+# Windows 11 optical sizes: Text for body copy, Display for large headings.
+FONT_FAMILY = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
+FONT_DISPLAY = '"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif'
 
 LIGHT: dict[str, str] = {
     "bg": "#F5F6FA",          # app background
     "surface": "#FFFFFF",      # cards / panels
     "surface_alt": "#FBFBFE",  # sidebar / subtle panels
     "surface_hover": "#F2F3F9",
-    "text": "#1B1C2A",         # primary text
-    "text_muted": "#646579",   # secondary text
+    "surface_press": "#E9EAF4",
+    "text": "#1B1C2A",         # primary text (≥ 12:1 on surface)
+    "text_muted": "#5D5E72",   # secondary text (≥ 4.5:1 on surface)
     "text_faint": "#9A9BAC",   # tertiary / placeholders
     "border": "#E8E8F0",
     "border_strong": "#D9DAE6",
@@ -30,12 +38,16 @@ LIGHT: dict[str, str] = {
     "on_primary": "#FFFFFF",
     "danger": "#F0483E",       # record / destructive (coral red)
     "danger_hover": "#DA362D",
+    "danger_press": "#C42A21",
     "danger_soft": "#FDECEA",
     "on_danger": "#FFFFFF",
+    "success": "#1B9E57",       # completed states (Done chip)
+    "success_soft": "#E5F6EC",
     "warning": "#B45309",       # caution (amber) — e.g. "no input detected"
     "warning_soft": "#FEF3C7",
     "focus": "#6366F1",
     "scroll_thumb": "#D4D5E0",
+    "scroll_thumb_hover": "#BDBECE",
     "shadow": "0,0,0",
 }
 
@@ -44,8 +56,9 @@ DARK: dict[str, str] = {
     "surface": "#181A22",
     "surface_alt": "#13141B",
     "surface_hover": "#21232D",
+    "surface_press": "#282A36",
     "text": "#EDEDF3",
-    "text_muted": "#9A9BAC",
+    "text_muted": "#A6A7B8",   # ≥ 4.5:1 on dark surfaces
     "text_faint": "#6C6D7E",
     "border": "#262833",
     "border_strong": "#31333F",
@@ -56,12 +69,17 @@ DARK: dict[str, str] = {
     "on_primary": "#FFFFFF",
     "danger": "#F26157",
     "danger_hover": "#F47169",
+    "danger_press": "#F5837B",
     "danger_soft": "#2A1B1C",
     "on_danger": "#FFFFFF",
+    "success": "#3ECF7A",
+    "success_soft": "#132A1D",
     "warning": "#FBBF24",       # caution (amber) — e.g. "no input detected"
     "warning_soft": "#2A2410",
     "focus": "#7C82F2",
-    "scroll_thumb": "#34364360",
+    "scroll_thumb": "#2E3140",
+    "scroll_thumb_hover": "#3B3E4F",
+    "shadow": "0,0,0",
 }
 
 
@@ -82,12 +100,18 @@ def build_qss(mode: Mode, check_icon: str | None = None) -> str:
 }}
 QWidget {{ background: transparent; }}
 QMainWindow, #Root {{ background-color: {t['bg']}; }}
+/* top-level windows must paint their own background (they can't inherit) */
+QDialog, QMessageBox {{ background-color: {t['surface']}; }}
 
 /* ---------- cards / panels ---------- */
 #Card {{
     background-color: {t['surface']};
     border: 1px solid {t['border']};
     border-radius: 16px;
+}}
+#Card[clickable="true"]:hover {{
+    border-color: {t['primary']};
+    background-color: {t['surface']};
 }}
 #Sidebar {{
     background-color: {t['surface_alt']};
@@ -102,12 +126,12 @@ QSplitter#MainSplitter::handle:hover {{ background: {t['primary_soft']}; }}
 #Topbar {{ background-color: transparent; }}
 
 /* ---------- text roles ---------- */
-#H1 {{ font-size: 26px; font-weight: 700; color: {t['text']}; }}
-#H2 {{ font-size: 19px; font-weight: 700; color: {t['text']}; }}
+#H1 {{ font-family: {FONT_DISPLAY}; font-size: 26px; font-weight: 700; color: {t['text']}; }}
+#H2 {{ font-family: {FONT_DISPLAY}; font-size: 20px; font-weight: 700; color: {t['text']}; }}
 #H3 {{ font-size: 15px; font-weight: 600; color: {t['text']}; }}
 #Muted {{ color: {t['text_muted']}; }}
 #Faint {{ color: {t['text_faint']}; font-size: 12px; }}
-#SectionLabel {{ color: {t['text_faint']}; font-size: 11px; font-weight: 600; }}
+#SectionLabel {{ color: {t['text_faint']}; font-size: 11px; font-weight: 700; }}
 
 /* ---------- buttons ---------- */
 QPushButton {{
@@ -120,7 +144,13 @@ QPushButton {{
     font-weight: 600;
 }}
 QPushButton:hover {{ background-color: {t['surface_hover']}; }}
-QPushButton:disabled {{ color: {t['text_faint']}; border-color: {t['border']}; }}
+QPushButton:pressed {{ background-color: {t['surface_press']}; }}
+QPushButton:focus {{ border: 1px solid {t['focus']}; }}
+QPushButton:disabled {{
+    color: {t['text_faint']};
+    background-color: {t['surface_alt']};
+    border-color: {t['border']};
+}}
 
 QPushButton[variant="primary"] {{
     background-color: {t['primary']};
@@ -130,6 +160,7 @@ QPushButton[variant="primary"] {{
 }}
 QPushButton[variant="primary"]:hover {{ background-color: {t['primary_hover']}; }}
 QPushButton[variant="primary"]:pressed {{ background-color: {t['primary_press']}; }}
+QPushButton[variant="primary"]:focus {{ background-color: {t['primary_hover']}; }}
 QPushButton[variant="primary"]:disabled {{ background-color: {t['primary_soft']}; color: {t['text_faint']}; }}
 
 QPushButton[variant="danger"] {{
@@ -139,6 +170,9 @@ QPushButton[variant="danger"] {{
     padding: 9px 18px;
 }}
 QPushButton[variant="danger"]:hover {{ background-color: {t['danger_hover']}; }}
+QPushButton[variant="danger"]:pressed {{ background-color: {t['danger_press']}; }}
+QPushButton[variant="danger"]:focus {{ background-color: {t['danger_hover']}; }}
+QPushButton[variant="danger"]:disabled {{ background-color: {t['danger_soft']}; color: {t['text_faint']}; }}
 
 QPushButton[variant="ghost"] {{
     background-color: transparent;
@@ -150,7 +184,9 @@ QPushButton[variant="ghost"] {{
     border-radius: 10px;
 }}
 QPushButton[variant="ghost"]:hover {{ background-color: {t['surface_hover']}; color: {t['text']}; }}
+QPushButton[variant="ghost"]:pressed {{ background-color: {t['surface_press']}; }}
 QPushButton[variant="ghost"]:checked {{ background-color: {t['primary_soft']}; color: {t['primary']}; }}
+QPushButton[variant="ghost"]:disabled {{ color: {t['text_faint']}; background-color: transparent; }}
 
 /* round icon-only buttons (rail) */
 QToolButton {{
@@ -160,6 +196,7 @@ QToolButton {{
     padding: 8px;
 }}
 QToolButton:hover {{ background-color: {t['surface_hover']}; }}
+QToolButton:pressed {{ background-color: {t['surface_press']}; }}
 QToolButton:checked {{ background-color: {t['primary_soft']}; }}
 
 /* ---------- inputs ---------- */
@@ -172,7 +209,13 @@ QLineEdit, QComboBox, QPlainTextEdit {{
     selection-background-color: {t['primary']};
     selection-color: {t['on_primary']};
 }}
-QLineEdit:focus, QComboBox:focus {{ border: 1px solid {t['focus']}; }}
+QLineEdit:hover, QComboBox:hover, QPlainTextEdit:hover {{ border-color: {t['text_faint']}; }}
+QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{ border: 1px solid {t['focus']}; }}
+QLineEdit:disabled, QComboBox:disabled, QPlainTextEdit:disabled {{
+    color: {t['text_faint']};
+    background-color: {t['surface_alt']};
+    border-color: {t['border']};
+}}
 QLineEdit::placeholder {{ color: {t['text_faint']}; }}
 QComboBox::drop-down {{ border: none; width: 26px; }}
 QComboBox QAbstractItemView {{
@@ -185,8 +228,9 @@ QComboBox QAbstractItemView {{
     outline: none;
 }}
 
-/* ---------- checkbox / switch-ish ---------- */
+/* ---------- checkbox ---------- */
 QCheckBox {{ color: {t['text']}; spacing: 8px; }}
+QCheckBox:disabled {{ color: {t['text_faint']}; }}
 QCheckBox::indicator {{
     width: 18px; height: 18px;
     border: 1px solid {t['border_strong']};
@@ -195,6 +239,25 @@ QCheckBox::indicator {{
 }}
 QCheckBox::indicator:hover {{ border-color: {t['primary']}; }}
 QCheckBox::indicator:checked {{ background: {t['primary']}; border-color: {t['primary']}; {check_rule} }}
+QCheckBox::indicator:checked:hover {{ background: {t['primary_hover']}; border-color: {t['primary_hover']}; }}
+QCheckBox::indicator:disabled {{ background: {t['surface_alt']}; border-color: {t['border']}; }}
+
+/* ---------- sliders (settings) ---------- */
+QSlider::groove:horizontal {{
+    height: 6px;
+    background: {t['surface_hover']};
+    border-radius: 3px;
+}}
+QSlider::sub-page:horizontal {{ background: {t['primary']}; border-radius: 3px; }}
+QSlider::handle:horizontal {{
+    width: 16px; height: 16px;
+    margin: -5px 0;
+    border-radius: 8px;
+    background: {t['primary']};
+    border: 2px solid {t['surface']};
+}}
+QSlider::handle:horizontal:hover {{ background: {t['primary_hover']}; }}
+QSlider::handle:horizontal:pressed {{ background: {t['primary_press']}; }}
 
 /* ---------- progress / level meters ---------- */
 QProgressBar {{
@@ -212,7 +275,7 @@ QTabWidget::pane {{ border: none; }}
 QTabBar::tab {{
     background: transparent;
     color: {t['text_muted']};
-    padding: 8px 16px;
+    padding: 9px 16px;
     margin-right: 4px;
     border: none;
     border-bottom: 2px solid transparent;
@@ -220,6 +283,7 @@ QTabBar::tab {{
 }}
 QTabBar::tab:selected {{ color: {t['primary']}; border-bottom: 2px solid {t['primary']}; }}
 QTabBar::tab:hover {{ color: {t['text']}; }}
+QTabBar::tab:disabled {{ color: {t['text_faint']}; }}
 
 /* ---------- text views ---------- */
 QTextBrowser, QTextEdit {{
@@ -235,19 +299,26 @@ QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{
     color: {t['text']};
     border-radius: 10px;
-    padding: 10px 10px;
+    padding: 9px 10px;
     margin: 2px 0;
+    border-left: 3px solid transparent;
 }}
 QListWidget::item:hover {{ background-color: {t['surface_hover']}; }}
-QListWidget::item:selected {{ background-color: {t['primary_soft']}; color: {t['text']}; }}
+QListWidget::item:selected {{
+    background-color: {t['primary_soft']};
+    color: {t['text']};
+    border-left: 3px solid {t['primary']};
+}}
 
 /* ---------- scrollbars ---------- */
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {t['scroll_thumb']}; border-radius: 5px; min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {t['scroll_thumb_hover']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: {t['scroll_thumb']}; border-radius: 5px; min-width: 30px; }}
+QScrollBar::handle:horizontal:hover {{ background: {t['scroll_thumb_hover']}; }}
 
 QToolTip {{
     background-color: {t['surface']};
@@ -255,5 +326,6 @@ QToolTip {{
     border: 1px solid {t['border']};
     border-radius: 8px;
     padding: 6px 10px;
+    font-size: 12px;
 }}
 """

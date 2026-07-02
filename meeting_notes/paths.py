@@ -48,7 +48,19 @@ def app_data_dir() -> Path:
 
 
 def recordings_dir() -> Path:
-    d = _recordings_override if _recordings_override is not None else (app_data_dir() / "recordings")
+    """The folder recordings are saved into.
+
+    If the user's custom folder is unavailable (USB/NAS drive disconnected),
+    fall back to the default app-data folder rather than raising — this runs at
+    stop-recording time, where an exception would lose the meeting's audio.
+    """
+    if _recordings_override is not None:
+        try:
+            _recordings_override.mkdir(parents=True, exist_ok=True)
+            return _recordings_override
+        except OSError:
+            pass  # fall through to the always-available default
+    d = app_data_dir() / "recordings"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

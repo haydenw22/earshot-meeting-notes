@@ -4,7 +4,7 @@ broadcasts theme changes to every page.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
@@ -51,6 +51,16 @@ class Shell(QMainWindow):
         self.theme.changed.connect(self._on_theme_changed)
         self.notify_data_changed()
         self.show_home()
+        # after the window is up, quietly salvage any recording a crash left behind
+        QTimer.singleShot(900, self._salvage_interrupted)
+
+        # call auto-detection: offer to record when another app starts using the mic
+        from .call_watcher import CallWatcher
+        self._call_toast = None
+        self.call_watcher = CallWatcher(self)
+        self.call_watcher.call_started.connect(self._on_call_started)
+        self.call_watcher.call_ended.connect(self._on_call_ended)
+        self.call_watcher.start()
 
     # ---------- construction ----------
     def _build(self) -> None:
@@ -173,6 +183,8 @@ class Shell(QMainWindow):
         lay.addWidget(sect)
 
         self.meeting_list = QListWidget()
+        self.meeting_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.meeting_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.meeting_list.itemClicked.connect(self._on_list_click)
         lay.addWidget(self.meeting_list, 1)
 
@@ -228,6 +240,81 @@ class Shell(QMainWindow):
         self.detail.load(int(meeting_id))
         self.stack.setCurrentWidget(self.detail)
         self._set_active("none")
+
+    # ---------- call auto-detection ----------
+    def _on_call_started(self, apps: list) -> None:
+        if not self.cfg.call_detect_enabled or self.record.is_busy():
+            return
+        from .call_watcher import CallToast
+        who = apps[0] if apps else "another app"
+        self._call_toast = CallToast(
+            f"Looks like a call just started in {who}. Record it with Earshot?",
+            accept_text="Record now",
+            on_accept=self._record_from_prompt,
+            on_dismiss=self.call_watcher.snooze_until_idle,
+        )
+        self._call_toast.show_toast()
+
+    def _record_from_prompt(self) -> None:
+        self.show_record()          # loads devices / defaults
+        self.record._start()        # start immediately with the saved defaults
+        self.raise_()
+
+    def _on_call_ended(self) -> None:
+        if not (self.record.recorder and self.record.recorder.running):
+            return
+        from .call_watcher import CallToast
+        self._call_toast = CallToast(
+            "The call seems to have ended. Stop recording and process the meeting?",
+            accept_text="Stop & process",
+            on_accept=self.record._stop,
+        )
+        self._call_toast.show_toast()
+
+    # ---------- crash salvage ----------
+    def _salvage_interrupted(self) -> None:
+        """If a previous session died mid-recording, its raw spool files are
+        still in the meeting folder — stream them into proper WAVs so the
+        meeting is recoverable instead of lost."""
+        from pathlib import Path
+
+        from ..audio import writer as wr
+        from ..paths import recordings_dir
+        from .workers import FuncWorker
+
+        try:
+            root = recordings_dir()
+        except OSError:
+            return
+        jobs = []
+        for m in self.repo.list():
+            folder = Path(m.audio_dir) if m.audio_dir else (root / f"meeting_{m.id:06d}")
+            if (folder / wr.SIDECAR).exists():
+                jobs.append((m.id, folder))
+        if not jobs:
+            return
+        repo = self.repo
+
+        def job(progress):
+            recovered = []
+            for mid, folder in jobs:
+                progress(f"Recovering interrupted recording…")
+                try:
+                    res = wr.salvage_spool(folder)
+                except Exception:
+                    continue
+                if res and res.get("frames"):
+                    repo.update(
+                        mid, audio_dir=str(folder), duration_secs=res["duration_secs"],
+                        status="Recorded",
+                        error="Recovered after an interrupted session — open it and Re-transcribe.",
+                    )
+                    recovered.append(mid)
+            return recovered
+
+        self._salvage_worker = FuncWorker(job)
+        self._salvage_worker.done.connect(lambda _r: self.notify_data_changed())
+        self._salvage_worker.start()
 
     # ---------- import an existing file ----------
     def _import_file(self) -> None:
@@ -354,10 +441,12 @@ class Shell(QMainWindow):
 
     # ---------- close guard ----------
     def closeEvent(self, event):
-        if self.record.is_busy():
+        from . import workers
+        if self.record.is_busy() or workers.active_count():
             if QMessageBox.question(
-                self, "Recording in progress",
-                "A recording or processing is still running. Quit anyway?"
+                self, "Work in progress",
+                "A recording or background task (transcription, summary, import…) is still "
+                "running and will be interrupted. Quit anyway?"
             ) != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return

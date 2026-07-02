@@ -125,9 +125,20 @@ class RecordPage(QWidget):
         agl = QVBoxLayout(ag)
         agl.setContentsMargins(22, 18, 22, 20)
         agl.setSpacing(10)
+        ag_head = QHBoxLayout()
         ag_lbl = QLabel("Agenda / notes")
         ag_lbl.setObjectName("H3")
-        agl.addWidget(ag_lbl)
+        ag_head.addWidget(ag_lbl)
+        ag_head.addStretch(1)
+        self.brief_btn = QPushButton("  Prep brief from past meetings")
+        self.brief_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.brief_btn.setToolTip(
+            "AI writes a short brief from related past meetings — what was decided last time "
+            "and what's still open — using the attendees/template above to find them."
+        )
+        self.brief_btn.clicked.connect(self._generate_brief)
+        ag_head.addWidget(self.brief_btn)
+        agl.addLayout(ag_head)
         self.agenda = QPlainTextEdit()
         self.agenda.setPlaceholderText(
             "Optional — talking points or an agenda to keep on screen during the call. "
@@ -233,6 +244,76 @@ class RecordPage(QWidget):
         if self.overlay is not None:
             self.overlay.close_overlay()
             self.overlay = None
+
+    # ---------- pre-meeting brief (meeting-series memory) ----------
+    def _related_past_meetings(self, limit: int = 3) -> list:
+        """Latest completed meetings sharing an attendee or the selected template;
+        falls back to the most recent completed meetings."""
+        wanted = {a.lower() for a in _parse_attendees(self.attendees.text())}
+        tpl = (self.template_combo.currentData() or "") if self.template_box.isVisible() else ""
+        done = [m for m in self.repo.list() if m.status == "Done" and m.notes]
+        related = [
+            m for m in done
+            if (wanted and wanted & {a.lower() for a in m.attendees})
+            or (tpl and m.template == tpl)
+        ]
+        return (related or done)[:limit]
+
+    def _generate_brief(self) -> None:
+        from ..notes import service as notes_service
+        if not notes_service.ready(self.cfg):
+            QMessageBox.warning(self, "Notes AI not configured", notes_service.missing_hint(self.cfg))
+            return
+        past = self._related_past_meetings()
+        if not past:
+            self.status_label.setText("No completed meetings yet to brief from.")
+            return
+        blocks = []
+        for m in past:
+            notes = m.notes or {}
+            open_items = [
+                f"- {a.get('task')}" + (f" (owner: {a.get('owner')})" if a.get("owner") else "")
+                for a in (notes.get("action_items") or [])
+                if isinstance(a, dict) and not a.get("done")
+            ]
+            blocks.append(
+                f"### {m.title or 'Untitled'} ({m.date_text})\n"
+                f"Summary: {notes.get('summary', '')}\n"
+                + ("Open action items:\n" + "\n".join(open_items) if open_items else "No open action items.")
+            )
+        instruction = (
+            "Write a short PRE-MEETING BRIEF for my upcoming meeting, based on these past "
+            "meetings. Structure: 'Last time' (2-3 bullet recap of key decisions), 'Still open' "
+            "(the unfinished action items with owners), 'Suggested talking points' (2-3 bullets). "
+            "Under 180 words, plain text, no preamble."
+        )
+        cfg = self.cfg
+        context = "\n\n".join(blocks)
+
+        self.brief_btn.setEnabled(False)
+        self.brief_btn.setText("  Writing brief…")
+        self.status_label.setText("Reading your past meetings…")
+
+        def job(_p):
+            from ..notes import service as notes_service
+            return notes_service.run_action(instruction, cfg, notes_text=context, title="Pre-meeting brief")
+
+        def done(text):
+            self.brief_btn.setEnabled(True)
+            self.brief_btn.setText("  Prep brief from past meetings")
+            existing = self.agenda.toPlainText().strip()
+            self.agenda.setPlainText(text + ("\n\n" + existing if existing else ""))
+            self.status_label.setText(f"Brief added from {len(past)} past meeting(s) — edit freely.")
+
+        def failed(msg):
+            self.brief_btn.setEnabled(True)
+            self.brief_btn.setText("  Prep brief from past meetings")
+            self.status_label.setText(f"Brief failed: {msg}")
+
+        self._brief_worker = FuncWorker(job)
+        self._brief_worker.done.connect(done)
+        self._brief_worker.failed.connect(failed)
+        self._brief_worker.start()
 
     def _add_bookmark(self) -> None:
         if not (self.recorder and self.recorder.running):
@@ -359,6 +440,7 @@ class RecordPage(QWidget):
             self.recorder = DualStreamRecorder(
                 mic_index=mic.index, mic_channels=mic.channels, mic_rate=mic.default_samplerate,
                 loop_index=them.index, loop_channels=them.channels, loop_rate=them.default_samplerate,
+                spool_dir=meeting_dir(self.meeting_id),  # in-folder spool → crash-salvageable
             )
             self._record_t0 = time.monotonic()
             self.recorder.start()
@@ -461,9 +543,11 @@ class RecordPage(QWidget):
 
         def job(progress):
             progress("Finalising audio")
-            result = recorder.stop()
-            wr.save_recording(result.me_48k, result.them_48k, audio_dir)
-            repo.update(mid, audio_dir=str(audio_dir), duration_secs=result.duration_secs, status="Recorded")
+            spool = recorder.stop()
+            # Streams the spools to WAV block-by-block; the raw spools (the only
+            # copy of the meeting) are deleted only after the WAVs verify.
+            wr.finalize_recording(spool, audio_dir)
+            repo.update(mid, audio_dir=str(audio_dir), duration_secs=spool.duration_secs, status="Recorded")
             if cfg.auto_transcribe:
                 process_recording(repo, mid, cfg, progress=progress, summarize=cfg.auto_summary)
             else:
@@ -490,6 +574,7 @@ class RecordPage(QWidget):
 
     def _on_done(self, mid) -> None:
         self.status_label.setText("Done.")
+        self.meeting_id = None  # editing the next session must not rewrite this one
         self._reset_controls()
         self.attendees.clear()
         self.agenda.clear()  # fresh form for the next recording
@@ -499,6 +584,7 @@ class RecordPage(QWidget):
 
     def _on_failed(self, msg: str) -> None:
         self.status_label.setText(f"Error: {msg}")
+        self.meeting_id = None
         self._reset_controls()
         self.shell.notify_data_changed()
         QMessageBox.critical(self, "Processing failed", msg)

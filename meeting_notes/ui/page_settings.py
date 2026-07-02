@@ -31,6 +31,19 @@ from ..transcription import whisper_client
 from .named_list import NamedListManager
 from .widgets import Card
 
+# One-click fills for the OpenAI-compatible transcription provider.
+# (label, base_url, model) — prices as of mid-2026, shown for orientation.
+ONLINE_PRESETS = [
+    ("Groq — Whisper large-v3-turbo  (~$0.04/hr — cheapest)",
+     "https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
+    ("Mistral — Voxtral Mini  (~$0.18/hr — top accuracy)",
+     "https://api.mistral.ai/v1", "voxtral-mini-latest"),
+    ("Groq — Whisper large-v3  (~$0.11/hr)",
+     "https://api.groq.com/openai/v1", "whisper-large-v3"),
+    ("OpenAI — whisper-1  (~$0.36/hr)",
+     "https://api.openai.com/v1", "whisper-1"),
+]
+
 
 class SettingsPage(QWidget):
     def __init__(self, shell, repo, cfg, theme):
@@ -138,6 +151,17 @@ class SettingsPage(QWidget):
         hcl.addWidget(self.dashboard_toggle)
         lay.addWidget(home_card)
 
+        cd_card, cdl = self._card(
+            "Call detection",
+            "When another app starts using your microphone (Zoom, Teams, a Meet tab…), Earshot "
+            "offers to record — so you never forget to hit Record. Nothing is captured until "
+            "you accept.",
+        )
+        self.call_detect = QCheckBox("Offer to record when a call starts")
+        self.call_detect.setChecked(self.cfg.call_detect_enabled)
+        cdl.addWidget(self.call_detect)
+        lay.addWidget(cd_card)
+
         ov_card, ovl = self._card(
             "Recording overlay",
             "A small always-on-top bar shown while recording: a timer plus two lights that glow "
@@ -194,8 +218,62 @@ class SettingsPage(QWidget):
         wcl.addLayout(wform)
         lay.addWidget(wh_card)
 
+        td_card, tdl = self._card(
+            "Todoist",
+            "Send open action items to Todoist from a meeting's page (the \"To Todoist\" button). "
+            "Get your token from Todoist → Settings → Integrations → Developer.",
+        )
+        tdform = QFormLayout()
+        tdform.setSpacing(10)
+        self.todoist_token = QLineEdit(self.cfg.todoist_token)
+        self.todoist_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.todoist_token.setPlaceholderText("Todoist API token  (blank = off)")
+        tdform.addRow("API token", self.todoist_token)
+        tdl.addLayout(tdform)
+        td_row = QHBoxLayout()
+        self.todoist_test_btn = QPushButton("Test connection")
+        self.todoist_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.todoist_test_btn.clicked.connect(self._test_todoist)
+        self.todoist_test_label = QLabel("")
+        td_row.addWidget(self.todoist_test_btn)
+        td_row.addWidget(self.todoist_test_label)
+        td_row.addStretch(1)
+        tdl.addLayout(td_row)
+        lay.addWidget(td_card)
+
         lay.addStretch(1)
         return w
+
+    def _test_todoist(self) -> None:
+        self.todoist_test_label.setText("Testing…")
+        self.todoist_test_label.repaint()
+        from ..integrations import todoist
+        ok = todoist.ping(self.todoist_token.text().strip())
+        self.todoist_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
+        self.todoist_test_label.setStyleSheet(
+            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
+        )
+
+    def _on_online_preset(self, *_) -> None:
+        data = self.online_preset.currentData()
+        if data:
+            base, model = data
+            self.online_base_url.setText(base)
+            self.online_model.setText(model)
+
+    def _on_notes_provider_changed(self, *_) -> None:
+        local = self.notes_provider_combo.currentData() == "openai"
+        self.llm_card.setVisible(local)
+
+    def _test_llm(self) -> None:
+        self.llm_test_label.setText("Testing…")
+        self.llm_test_label.repaint()
+        from ..notes import openai_llm
+        ok = openai_llm.ping(self.llm_base_url.text().strip(), self.llm_key.text().strip())
+        self.llm_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
+        self.llm_test_label.setStyleSheet(
+            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
+        )
 
     def _reset_overlay_position(self) -> None:
         from ..config import OVERLAY_AUTO_POS
@@ -299,10 +377,15 @@ class SettingsPage(QWidget):
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         self.language = QLineEdit(self.cfg.whisper_language)
         self.language.setPlaceholderText("en  (blank = auto-detect)")
+        self.upload_codec = QComboBox()
+        self.upload_codec.addItem("FLAC — lossless (default)", "flac")
+        self.upload_codec.addItem("Opus — ~4× smaller uploads (~10 MB/hour)", "opus")
+        self.upload_codec.setCurrentIndex(1 if self.cfg.upload_codec == "opus" else 0)
         form0 = QFormLayout()
         form0.setSpacing(10)
         form0.addRow("Source", self.provider_combo)
         form0.addRow("Language", self.language)
+        form0.addRow("Upload format", self.upload_codec)
         scl.addLayout(form0)
         self.auto_transcribe = QCheckBox("Automatically transcribe when a recording stops")
         self.auto_transcribe.setChecked(self.cfg.auto_transcribe)
@@ -329,15 +412,34 @@ class SettingsPage(QWidget):
         hcl.addWidget(vad_hint)
         lay.addWidget(self.home_card)
 
-        self.online_card, ocl = self._card("Online service", "Any OpenAI-compatible audio API. The API key is in the AI tab.")
+        self.online_card, ocl = self._card(
+            "Online service",
+            "Any OpenAI-compatible audio API — pick a preset or enter your own. "
+            "The API key lives in the AI tab (\"Online transcription key\").",
+        )
         oform = QFormLayout()
         oform.setSpacing(10)
+        self.online_preset = QComboBox()
+        self.online_preset.addItem("Custom…", None)
+        for label, base, model in ONLINE_PRESETS:
+            self.online_preset.addItem(label, (base, model))
         self.online_base_url = QLineEdit(self.cfg.online_base_url)
         self.online_model = QLineEdit(self.cfg.online_model)
+        # reflect the saved config in the preset combo when it matches one
+        for i, (_l, base, model) in enumerate(ONLINE_PRESETS, start=1):
+            if self.cfg.online_base_url == base and self.cfg.online_model == model:
+                self.online_preset.setCurrentIndex(i)
+                break
+        self.online_preset.currentIndexChanged.connect(self._on_online_preset)
+        oform.addRow("Preset", self.online_preset)
         oform.addRow("Base URL", self.online_base_url)
         oform.addRow("Model", self.online_model)
         ocl.addLayout(oform)
-        hint = QLabel("OpenAI → https://api.openai.com/v1 · whisper-1      Groq → https://api.groq.com/openai/v1 · whisper-large-v3")
+        hint = QLabel(
+            "Uploads are 16 kHz FLAC (~40–60 min of speech fits the 25 MB OpenAI/Groq cap). "
+            "For very long meetings use the home server or Deepgram. Paste the matching "
+            "provider's API key in Settings → AI."
+        )
         hint.setObjectName("Faint")
         hint.setWordWrap(True)
         ocl.addWidget(hint)
@@ -406,6 +508,20 @@ class SettingsPage(QWidget):
     # ---------- AI ----------
     def _ai_tab(self) -> QWidget:
         w, lay = self._tab()
+
+        prov_card, pcl = self._card("Notes AI", "Which model writes your meeting notes and runs AI actions.")
+        self.notes_provider_combo = QComboBox()
+        self.notes_provider_combo.addItem("Claude (Anthropic) — richest notes", "anthropic")
+        self.notes_provider_combo.addItem("Local / OpenAI-compatible (Ollama, LM Studio…)", "openai")
+        _npi = self.notes_provider_combo.findData(self.cfg.notes_provider)
+        self.notes_provider_combo.setCurrentIndex(_npi if _npi >= 0 else 0)
+        self.notes_provider_combo.currentIndexChanged.connect(self._on_notes_provider_changed)
+        pform = QFormLayout()
+        pform.setSpacing(10)
+        pform.addRow("Provider", self.notes_provider_combo)
+        pcl.addLayout(pform)
+        lay.addWidget(prov_card)
+
         card, cl = self._card("Claude (Anthropic)", "Used to turn the transcript into notes and to answer questions. Stored locally.")
         form = QFormLayout()
         form.setSpacing(10)
@@ -419,15 +535,54 @@ class SettingsPage(QWidget):
         self.auto_summary = QCheckBox("Automatically generate notes after transcription")
         self.auto_summary.setChecked(self.cfg.auto_summary)
         cl.addWidget(self.auto_summary)
+        self.claude_card = card
         lay.addWidget(card)
 
-        oa_card, ocl = self._card("OpenAI", "Only needed if you use the online transcription service (OpenAI or Groq).")
+        self.llm_card, lcl = self._card(
+            "Local / OpenAI-compatible LLM",
+            "Run notes fully locally (Ollama, LM Studio, vLLM) or via any OpenAI-compatible "
+            "gateway. Ask Earshot still uses Claude.",
+        )
+        lform = QFormLayout()
+        lform.setSpacing(10)
+        self.llm_base_url = QLineEdit(self.cfg.llm_base_url)
+        self.llm_base_url.setPlaceholderText("http://localhost:11434/v1")
+        self.llm_model = QLineEdit(self.cfg.llm_model)
+        self.llm_model.setPlaceholderText("llama3.1  ·  qwen2.5:14b  ·  …")
+        self.llm_key = QLineEdit(self.cfg.llm_api_key)
+        self.llm_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.llm_key.setPlaceholderText("optional — local servers usually need none")
+        lform.addRow("Base URL", self.llm_base_url)
+        lform.addRow("Model", self.llm_model)
+        lform.addRow("API key", self.llm_key)
+        lcl.addLayout(lform)
+        llm_row = QHBoxLayout()
+        self.llm_test_btn = QPushButton("Test connection")
+        self.llm_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.llm_test_btn.clicked.connect(self._test_llm)
+        self.llm_test_label = QLabel("")
+        llm_row.addWidget(self.llm_test_btn)
+        llm_row.addWidget(self.llm_test_label)
+        llm_row.addStretch(1)
+        lcl.addLayout(llm_row)
+        lhint = QLabel("Ollama: install from ollama.com, then `ollama pull llama3.1` — the base URL above is its default.")
+        lhint.setObjectName("Faint")
+        lhint.setWordWrap(True)
+        lcl.addWidget(lhint)
+        lay.addWidget(self.llm_card)
+        self._on_notes_provider_changed()
+
+        oa_card, ocl = self._card(
+            "Online transcription key",
+            "The API key for the online transcription provider chosen in the Transcription tab "
+            "(Groq, Mistral or OpenAI — paste whichever provider's key you use).",
+        )
         oform = QFormLayout()
         oform.setSpacing(10)
         self.online_key = QLineEdit(self.cfg.online_api_key)
         self.online_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.online_key.setPlaceholderText("sk-…  (or set OPENAI_API_KEY)")
-        oform.addRow("OpenAI API key", self.online_key)
+        oform.addRow("API key", self.online_key)
         ocl.addLayout(oform)
         lay.addWidget(oa_card)
 
@@ -539,6 +694,7 @@ class SettingsPage(QWidget):
         self.cfg.whisper_language = self.language.text().strip()
         self.cfg.whisper_url = self.whisper_url.text().strip()
         self.cfg.whisper_vad_filter = self.whisper_vad.isChecked()
+        self.cfg.upload_codec = self.upload_codec.currentData() or "flac"
         self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
         self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
         self.cfg.online_api_key = self.online_key.text().strip()
@@ -546,6 +702,10 @@ class SettingsPage(QWidget):
         self.cfg.deepgram_model = self.deepgram_model.text().strip() or "nova-2"
         self.cfg.anthropic_api_key = self.api_key.text().strip()
         self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
+        self.cfg.notes_provider = self.notes_provider_combo.currentData() or "anthropic"
+        self.cfg.llm_base_url = self.llm_base_url.text().strip()
+        self.cfg.llm_model = self.llm_model.text().strip()
+        self.cfg.llm_api_key = self.llm_key.text().strip()
         self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
         self.cfg.auto_summary = self.auto_summary.isChecked()
         self.cfg.mic_device_name = self.mic_combo.currentData()
@@ -553,6 +713,7 @@ class SettingsPage(QWidget):
         self.cfg.screen_monitor = self.monitor_combo.currentData() or 1
         # automation + AI customisation + home + overlay
         self.cfg.show_dashboard = self.dashboard_toggle.isChecked()
+        self.cfg.call_detect_enabled = self.call_detect.isChecked()
         self.cfg.overlay_enabled = self.overlay_enabled.isChecked()
         self.cfg.overlay_opacity = self.overlay_opacity.value() / 100.0
         ov = getattr(self.shell.record, "overlay", None)
@@ -560,6 +721,7 @@ class SettingsPage(QWidget):
             ov.set_opacity(self.cfg.overlay_opacity)
         self.cfg.webhook_url = self.webhook_url.text().strip()
         self.cfg.webhook_when = self.webhook_when.currentData() or "summary"
+        self.cfg.todoist_token = self.todoist_token.text().strip()
         self.cfg.custom_instructions_enabled = self.ci_toggle.isChecked()
         self.cfg.custom_instructions = self.ci_text.toPlainText().strip()
         self.cfg.templates = self.templates_mgr.items()

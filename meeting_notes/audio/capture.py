@@ -2,44 +2,48 @@
 ("them"), each on its own stream, collected via PortAudio callbacks.
 
 Callbacks stay tiny — they only stash raw bytes and a running level — so the
-audio threads never block. Alignment/AEC/resampling all happen on stop(), which
-is the robust "offline" model (we keep the raw streams as the source of truth).
+audio threads never block. Crucially, stop() does NOT load the audio into RAM:
+it returns the spool-file paths and their formats, and writer.finalize_recording
+streams them to WAV in small blocks. The raw spools are the source of truth and
+are only deleted after the WAVs are durably on disk — a crash, MemoryError or
+disk-full during finalisation can no longer destroy the meeting.
+
+When a spool_dir is given (the meeting's own folder), a `spool.json` sidecar
+records the stream formats so an interrupted recording can be salvaged on the
+next launch.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import time
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pyaudiowpatch as pyaudio
 
-from .writer import TARGET_RATE, resample, to_mono
-
-
-@dataclass
-class RecordingResult:
-    me_48k: np.ndarray          # float32 mono @ 48 kHz (microphone)
-    them_48k: np.ndarray        # float32 mono @ 48 kHz (system audio)
-    samplerate: int
-    duration_secs: float
-    mic_rate: int
-    loop_rate: int
+from .writer import SIDECAR, RecordingSpool, SpoolInfo
 
 
 class _Stream:
-    """One capture stream. Frames are written straight to a temp file in the
+    """One capture stream. Frames are written straight to a spool file in the
     callback, so RAM stays flat even on multi-hour recordings (no in-memory
     accumulation)."""
 
-    def __init__(self, p, index: int, channels: int, rate: int):
+    def __init__(self, p, index: int, channels: int, rate: int,
+                 spool_path: Optional[Path] = None):
         self.channels = max(1, int(channels))
         self.rate = int(rate)
         self.level = 0.0  # 0..1 RMS for the meter
-        fd, self._path = tempfile.mkstemp(suffix=".raw", prefix="earshot_")
-        self._file = os.fdopen(fd, "wb")
+        if spool_path is not None:
+            spool_path.parent.mkdir(parents=True, exist_ok=True)
+            self._path = str(spool_path)
+            self._file = open(self._path, "wb")
+        else:
+            fd, self._path = tempfile.mkstemp(suffix=".raw", prefix="earshot_")
+            self._file = os.fdopen(fd, "wb")
         self._stream = p.open(
             format=pyaudio.paInt16,
             channels=self.channels,
@@ -49,6 +53,10 @@ class _Stream:
             input_device_index=index,
             stream_callback=self._cb,
         )
+
+    @property
+    def path(self) -> str:
+        return self._path
 
     def _cb(self, in_data, frame_count, time_info, status):
         try:
@@ -76,33 +84,22 @@ class _Stream:
             pass
 
     def discard(self) -> None:
-        """Close and delete the temp file without reading (start-failure cleanup)."""
+        """Close and delete the spool without reading (start-failure cleanup)."""
         self._close()
         try:
             os.unlink(self._path)
         except OSError:
             pass
 
-    def stop(self) -> np.ndarray:
+    def detach(self) -> SpoolInfo:
+        """Close the stream and hand over the spool file — nothing is read into
+        memory and nothing is deleted here."""
         self._close()
-        try:
-            arr = np.fromfile(self._path, dtype=np.int16)
-        except OSError:
-            arr = np.zeros(0, dtype=np.int16)
-        finally:
-            try:
-                os.unlink(self._path)
-            except OSError:
-                pass
-        if arr.size == 0:
-            return np.zeros(0, dtype=np.float32)
-        usable = (arr.size // self.channels) * self.channels
-        arr = arr[:usable].reshape(-1, self.channels)
-        return to_mono(arr)  # float32 mono @ self.rate
+        return SpoolInfo(path=self._path, rate=self.rate, channels=self.channels)
 
 
 class DualStreamRecorder:
-    """Open mic + loopback, record until stop(), return aligned 48 kHz mono pair."""
+    """Open mic + loopback, record until stop(), hand back the spool files."""
 
     def __init__(
         self,
@@ -112,6 +109,7 @@ class DualStreamRecorder:
         loop_index: int,
         loop_channels: int,
         loop_rate: int,
+        spool_dir: Optional[Path] = None,
     ):
         self.mic_index = mic_index
         self.mic_channels = min(2, max(1, mic_channels))
@@ -119,19 +117,25 @@ class DualStreamRecorder:
         self.loop_index = loop_index
         self.loop_channels = max(1, loop_channels)
         self.loop_rate = loop_rate
+        self.spool_dir = Path(spool_dir) if spool_dir else None
 
         self._p: Optional[pyaudio.PyAudio] = None
         self._mic: Optional[_Stream] = None
         self._loop: Optional[_Stream] = None
+        self._sidecar: Optional[str] = None
         self._t0 = 0.0
         self._running = False
 
     def start(self) -> None:
         self._p = pyaudio.PyAudio()
+        me_path = (self.spool_dir / "spool_me.raw") if self.spool_dir else None
+        them_path = (self.spool_dir / "spool_them.raw") if self.spool_dir else None
         try:
             # Open loopback first so we don't miss the start of their audio.
-            self._loop = _Stream(self._p, self.loop_index, self.loop_channels, self.loop_rate)
-            self._mic = _Stream(self._p, self.mic_index, self.mic_channels, self.mic_rate)
+            self._loop = _Stream(self._p, self.loop_index, self.loop_channels, self.loop_rate,
+                                 spool_path=them_path)
+            self._mic = _Stream(self._p, self.mic_index, self.mic_channels, self.mic_rate,
+                                spool_path=me_path)
         except Exception:
             # clean up any partial allocation so a failed start can't leak streams
             if self._mic is not None:
@@ -146,6 +150,19 @@ class DualStreamRecorder:
                 pass
             self._p = None
             raise
+        if self.spool_dir is not None:
+            # sidecar lets a crashed recording be salvaged on the next launch
+            self._sidecar = str(self.spool_dir / SIDECAR)
+            try:
+                Path(self._sidecar).write_text(json.dumps({
+                    "me": {"path": self._mic.path, "rate": self.mic_rate,
+                           "channels": self._mic.channels},
+                    "them": {"path": self._loop.path, "rate": self.loop_rate,
+                             "channels": self._loop.channels},
+                    "started_at": time.time(),
+                }, indent=2), encoding="utf-8")
+            except OSError:
+                self._sidecar = None
         self._t0 = time.monotonic()
         self._running = True
 
@@ -165,37 +182,15 @@ class DualStreamRecorder:
     def them_level(self) -> float:
         return self._loop.level if self._loop else 0.0
 
-    def stop(self) -> RecordingResult:
+    def stop(self) -> RecordingSpool:
         if not self._running:
             raise RuntimeError("recorder not running")
         duration = self.elapsed
         self._running = False
-        me = self._mic.stop() if self._mic else np.zeros(0, dtype=np.float32)
-        them = self._loop.stop() if self._loop else np.zeros(0, dtype=np.float32)
+        me = self._mic.detach() if self._mic else SpoolInfo("", 48000, 1)
+        them = self._loop.detach() if self._loop else SpoolInfo("", 48000, 1)
         if self._p is not None:
             self._p.terminate()
             self._p = None
-
-        me_48k = resample(me, self.mic_rate, TARGET_RATE) if me.size else me
-        them_48k = resample(them, self.loop_rate, TARGET_RATE) if them.size else them
-
-        # Pad the shorter stream with silence so the two channels share a timeline.
-        n = max(len(me_48k), len(them_48k))
-        if n:
-            me_48k = _pad(me_48k, n)
-            them_48k = _pad(them_48k, n)
-
-        return RecordingResult(
-            me_48k=me_48k,
-            them_48k=them_48k,
-            samplerate=TARGET_RATE,
-            duration_secs=duration,
-            mic_rate=self.mic_rate,
-            loop_rate=self.loop_rate,
-        )
-
-
-def _pad(x: np.ndarray, n: int) -> np.ndarray:
-    if len(x) >= n:
-        return x[:n]
-    return np.concatenate([x, np.zeros(n - len(x), dtype=np.float32)])
+        return RecordingSpool(me=me, them=them, duration_secs=duration,
+                              sidecar_path=self._sidecar)

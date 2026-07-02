@@ -173,6 +173,7 @@ class AskPage(QWidget):
         lay.setContentsMargins(16, 12, 16, 12)
         lbl = QLabel(text)
         lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.PlainText)  # never render AI/user text as rich text
         if role == "thinking" or role == "error":
             lbl.setObjectName("Muted")
         lay.addWidget(lbl)
@@ -200,6 +201,7 @@ class AskPage(QWidget):
         lay.setSpacing(8)
         body = QLabel(ans.text)
         body.setWordWrap(True)
+        body.setTextFormat(Qt.TextFormat.PlainText)  # AI answer is untrusted → no rich text
         lay.addWidget(body)
         if ans.citations:
             chips = QHBoxLayout()

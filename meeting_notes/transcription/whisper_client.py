@@ -18,8 +18,12 @@ class WhisperError(RuntimeError):
 
 def _timeout(timeout: Optional[float]) -> httpx.Timeout:
     if timeout is None:
-        # no read/write ceiling (long meetings); still bound the connect attempt
-        return httpx.Timeout(None, connect=15.0)
+        # Long meetings can take minutes server-side, so the read ceiling is
+        # generous — but NOT infinite: a wedged container / dropped Wi-Fi with no
+        # RST would otherwise hang the worker forever (meeting stuck "Transcribing",
+        # Record button disabled, and quitting then aborts the process). A 30-min
+        # read stall is never legitimate even for a multi-hour file.
+        return httpx.Timeout(1800.0, connect=15.0, write=300.0)
     return httpx.Timeout(timeout, connect=15.0)
 
 
@@ -31,7 +35,9 @@ def ping(base_url: str, timeout: float = 8.0) -> bool:
     for path in ("/openapi.json", "/docs"):
         try:
             r = httpx.get(base + path, timeout=timeout)
-            if r.status_code < 500:
+            # require a real 200 — a 404 from some other LAN service (e.g. a
+            # mistyped port hitting the NAS web UI) must NOT report "connected"
+            if r.status_code == 200:
                 return True
         except httpx.HTTPError:
             continue
@@ -62,9 +68,10 @@ def transcribe(
         params["vad_filter"] = "true"
 
     audio_path = Path(audio_path)
+    mime = {".wav": "audio/wav", ".flac": "audio/flac"}.get(audio_path.suffix.lower(), "audio/wav")
     try:
         with open(audio_path, "rb") as fh:
-            files = {"audio_file": (audio_path.name, fh, "audio/wav")}
+            files = {"audio_file": (audio_path.name, fh, mime)}
             resp = httpx.post(
                 base + "/asr", params=params, files=files, timeout=_timeout(timeout)
             )
@@ -76,7 +83,12 @@ def transcribe(
 
     if output == "json":
         try:
-            return resp.json()
+            data = resp.json()
         except ValueError as e:
             raise WhisperError(f"Whisper returned non-JSON: {resp.text[:300]}") from e
+        if not isinstance(data, dict) or not isinstance(data.get("segments", []), list):
+            raise WhisperError(
+                "unexpected response shape — is this URL really a whisper-asr-webservice?"
+            )
+        return data
     return {"text": resp.text, "segments": []}

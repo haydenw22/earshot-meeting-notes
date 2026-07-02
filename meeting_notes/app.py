@@ -57,6 +57,7 @@ def run() -> int:
     from .paths import set_recordings_dir
     set_recordings_dir(cfg.data_dir)  # honour a custom recordings folder
     repo = MeetingRepository()
+    repo.recover_interrupted()  # unstick meetings a previous crash left mid-flight
 
     theme = ThemeController(cfg)
     theme.apply()

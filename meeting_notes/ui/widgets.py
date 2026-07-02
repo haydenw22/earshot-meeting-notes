@@ -43,8 +43,11 @@ def make_chip(text: str, *, fg: str, bg: str) -> QLabel:
 
 
 # Maps a meeting status to (foreground, background-token) roles resolved later.
+# Semantics: green = finished, indigo = ready-for-AI, red = live/destructive,
+# neutral = in-flight. The chip text always carries the meaning too (never
+# color-only).
 STATUS_ROLES = {
-    "Done": ("primary", "primary_soft"),
+    "Done": ("success", "success_soft"),
     "Transcribed": ("primary", "primary_soft"),
     "Recording": ("danger", "danger_soft"),
     "Transcribing": ("text_muted", "surface_hover"),

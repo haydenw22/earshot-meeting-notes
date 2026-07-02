@@ -17,6 +17,10 @@ class ActionItem(BaseModel):
     task: str = Field(description="The action, specific and self-contained.")
     owner: Optional[str] = Field(default=None, description="Who owns it, or null if unclear — never invent a name.")
     done: bool = Field(default=False, description="True only if completed/resolved during the meeting itself.")
+    # Not part of the model-facing tool schema: AI-generated items start as
+    # SUGGESTIONS (confirmed=False) and only become real to-dos when the user
+    # accepts them. Legacy items without the key are treated as confirmed.
+    confirmed: bool = Field(default=False)
 
 
 class Section(BaseModel):
@@ -26,7 +30,7 @@ class Section(BaseModel):
 
 class MeetingNotes(BaseModel):
     title: str = Field(description="A single sentence of at most ~12 words capturing the meeting's purpose or outcome.")
-    summary: str = Field(description="A 2-4 sentence prose overview of the meeting.")
+    summary: str = Field(description="A crisp 1-2 sentence overview (max ~40 words).")
     attendees: list[str] = Field(default_factory=list, description="People present, inferred from speakers and names mentioned.")
     action_items: list[ActionItem] = Field(default_factory=list)
     sections: list[Section] = Field(default_factory=list, description="The body, organised by topic.")
@@ -43,7 +47,7 @@ def notes_tool_schema() -> dict:
             },
             "summary": {
                 "type": "string",
-                "description": "A 2-4 sentence prose overview of the meeting.",
+                "description": "A crisp 1-2 sentence overview (max ~40 words). Detail belongs in sections, not here.",
             },
             "attendees": {
                 "type": "array",

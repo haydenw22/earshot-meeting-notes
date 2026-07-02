@@ -52,10 +52,19 @@ class Config:
     # Deepgram (cloud STT — fast, accurate, no 25 MB cap; good for long meetings)
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-2"
+    # upload format for transcription: "flac" (lossless) | "opus" (~4x smaller —
+    # ~10 MB/hour — with negligible accuracy impact; great for cloud providers)
+    upload_codec: str = "flac"
 
-    # --- Notes (Anthropic) ---
+    # --- Notes / AI ---
+    # "anthropic" (Claude — richest notes) | "openai" (any OpenAI-compatible LLM,
+    # incl. fully local: Ollama, LM Studio, vLLM…)
+    notes_provider: str = "anthropic"
     anthropic_api_key: str = ""           # read from env ANTHROPIC_API_KEY if blank
     anthropic_model: str = "claude-sonnet-4-6"  # richer notes than Haiku; user can change in Settings
+    llm_base_url: str = "http://localhost:11434/v1"  # Ollama default
+    llm_api_key: str = ""                 # optional (local servers usually need none)
+    llm_model: str = ""                   # e.g. "llama3.1", "qwen2.5:14b"
     auto_summary: bool = True             # generate AI notes automatically after transcription
     # AI customisation
     custom_instructions_enabled: bool = False
@@ -66,6 +75,7 @@ class Config:
     # --- Automation ---
     webhook_url: str = ""                 # POST the meeting here when ready
     webhook_when: str = "summary"         # "transcript" (after transcript) | "summary" (after notes)
+    todoist_token: str = ""               # push open action items into Todoist
 
     # --- Audio devices (stored by name; re-resolved to index at record time) ---
     mic_device_name: Optional[str] = None
@@ -85,6 +95,9 @@ class Config:
     sidebar_width: int = 258              # resizable; persisted
     sidebar_side: str = "left"            # "left" | "right"
     show_dashboard: bool = True           # show the pending-action-items dashboard on Home
+
+    # --- Call detection (prompt to record when another app starts using the mic) ---
+    call_detect_enabled: bool = True
 
     # --- Recording overlay (always-on-top mic/system lights + timer) ---
     overlay_enabled: bool = True
@@ -107,19 +120,37 @@ class Config:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            # Keep the damaged file as evidence instead of silently overwriting
+            # the user's settings (keys, server URL) on the next save.
+            try:
+                p.replace(p.with_suffix(".json.bad"))
+            except OSError:
+                pass
+            return cls()
+        if not isinstance(data, dict):
             return cls()
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
         clean = {k: v for k, v in data.items() if k in known}
         unknown = {k: v for k, v in data.items() if k not in known and k != "extra"}
+        # container fields must have the right container type or defaults win
+        for key, want in (("templates", list), ("ai_actions", list), ("extra", dict)):
+            if key in clean and not isinstance(clean[key], want):
+                del clean[key]
         cfg = cls(**clean)
         if unknown:  # preserve forward/unknown keys instead of dropping them
             cfg.extra.update(unknown)
+        # re-promote fields a newer version wrote and an older version demoted
+        for k in [k for k in cfg.extra if k in known]:
+            setattr(cfg, k, cfg.extra.pop(k))
         return cfg
 
     def save(self) -> None:
-        config_path().write_text(
-            json.dumps(asdict(self), indent=2), encoding="utf-8"
-        )
+        # Atomic: a crash/power-loss mid-write must never leave a torn file
+        # (which would reset every setting on the next launch).
+        p = config_path()
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        tmp.replace(p)
 
     def resolved_anthropic_key(self) -> str:
         import os

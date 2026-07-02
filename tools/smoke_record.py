@@ -47,21 +47,24 @@ def main() -> int:
     while time.monotonic() < t_end:
         time.sleep(0.2)
         print(f"  you={rec.mic_level:4.2f}  them={rec.them_level:4.2f}", end="\r")
-    result = rec.stop()
+    spool = rec.stop()
     print()
 
-    print(f"Captured: me={len(result.me_48k)} samples, them={len(result.them_48k)} samples "
-          f"@ {result.samplerate} Hz  ({result.duration_secs:.1f}s)")
-    print(f"Levels:   me={_rms_db(result.me_48k):6.1f} dBFS   them={_rms_db(result.them_48k):6.1f} dBFS")
-
     out_dir = Path(__file__).resolve().parent.parent / "recordings" / "_smoke"
-    paths = writer.save_recording(result.me_48k, result.them_48k, out_dir)
+    paths = writer.finalize_recording(spool, out_dir)  # streaming, crash-safe path
+    print(f"Captured: {paths['frames']} frames @ {writer.TARGET_RATE} Hz "
+          f"({spool.duration_secs:.1f}s)")
     print(f"Wrote:    {paths['meeting']}")
+
+    import soundfile as sf
+    me_48k, _ = sf.read(paths["me"], dtype="float32")
+    them_48k, _ = sf.read(paths["them"], dtype="float32")
+    print(f"Levels:   me={_rms_db(me_48k):6.1f} dBFS   them={_rms_db(them_48k):6.1f} dBFS")
 
     print(f"AEC available: {aec.is_available()}")
     if aec.is_available():
-        delay = calibrate.estimate_delay_ms(result.me_48k, result.them_48k)
-        cleaned = aec.cancel_echo(result.me_48k, result.them_48k, delay_ms=delay)
+        delay = calibrate.estimate_delay_ms(me_48k, them_48k)
+        cleaned = aec.cancel_echo(me_48k, them_48k, delay_ms=delay)
         print(f"AEC ran OK: delay~{delay:.0f}ms, cleaned {len(cleaned)} samples, "
               f"me_clean={_rms_db(cleaned):.1f} dBFS")
     return 0

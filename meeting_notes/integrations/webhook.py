@@ -6,6 +6,8 @@ leaves the machine, so it's opt-in (blank URL = off).
 """
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import httpx
 
 
@@ -30,5 +32,10 @@ def send(url: str, payload: dict, *, timeout: float = 20.0) -> None:
     url = (url or "").strip()
     if not url:
         return
-    resp = httpx.post(url, json=payload, timeout=timeout)
+    # only ever POST to http(s) — never file://, etc.
+    if urlparse(url).scheme not in ("http", "https"):
+        raise ValueError("Webhook URL must start with http:// or https://")
+    # follow redirects so a plain http endpoint that 301s to https still delivers
+    # (otherwise every meeting silently fails on the redirect)
+    resp = httpx.post(url, json=payload, timeout=timeout, follow_redirects=True)
     resp.raise_for_status()

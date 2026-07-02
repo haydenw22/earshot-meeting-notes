@@ -81,6 +81,7 @@ class DetailPage(QWidget):
 
         self.title = QLabel()
         self.title.setObjectName("H1")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)  # AI-generated title → no rich text
         self.title.setWordWrap(True)
         root.addWidget(self.title)
 
@@ -161,13 +162,18 @@ class DetailPage(QWidget):
 
         btns = QHBoxLayout()
         btns.setSpacing(10)
-        self.copy_btn = self._action("Copy summary", self._copy_summary)
+        self.copy_btn = self._action("Copy notes", self._copy_summary)
         self.copy_btn.setProperty("variant", "primary")
+        self.share_btn = self._action("Share…", self._share_html)
+        self.todoist_btn = self._action("To Todoist", self._send_todoist)
         self.resummarise_btn = self._action("Re-summarise", self._resummarise)
         self.reprocess_btn = self._action("Re-transcribe", self._reprocess)
-        self.folder_btn = self._action("Open audio folder", self._open_folder)
+        self.folder_btn = self._action("Folder", self._open_folder)
+        self.folder_btn.setToolTip("Open this meeting's audio folder")
         self.delete_btn = self._action("Delete", self._delete)
         btns.addWidget(self.copy_btn)
+        btns.addWidget(self.share_btn)
+        btns.addWidget(self.todoist_btn)
         btns.addWidget(self.resummarise_btn)
         btns.addWidget(self.reprocess_btn)
         btns.addWidget(self.folder_btn)
@@ -189,7 +195,13 @@ class DetailPage(QWidget):
     def refresh(self) -> None:
         if self.meeting_id is None:
             return
-        m = self.repo.get(self.meeting_id)
+        try:
+            m = self.repo.get(self.meeting_id)
+        except KeyError:
+            # meeting was deleted; a later theme toggle / worker completion must
+            # not crash trying to re-render it
+            self.meeting_id = None
+            return
         self.title.setText(m.title or "Untitled meeting")
 
         # rebuild meta chips
@@ -214,6 +226,14 @@ class DetailPage(QWidget):
         self._render_bookmarks(m)
         self._populate_actions()
         self.copy_btn.setEnabled(bool(m.notes))
+        self.share_btn.setEnabled(bool(m.notes or m.transcript))
+        has_open = any(isinstance(a, dict) and not a.get("done") and a.get("confirmed", True)
+                       for a in (m.notes or {}).get("action_items") or [])
+        self.todoist_btn.setEnabled(has_open)
+        self.todoist_btn.setToolTip(
+            "Create a Todoist task for each accepted open action item"
+            if has_open else "No accepted open action items to send (keep ✓ suggestions first)"
+        )
         self.resummarise_btn.setEnabled(bool(m.transcript))
         self.reprocess_btn.setEnabled(bool(m.audio_dir))
         self.folder_btn.setEnabled(bool(m.audio_dir))
@@ -294,6 +314,7 @@ class DetailPage(QWidget):
         if notes.get("summary"):
             s = QLabel(notes["summary"])
             s.setWordWrap(True)
+            s.setTextFormat(Qt.TextFormat.PlainText)  # AI summary is untrusted → no rich text
             self.notes_lay.addWidget(s)
 
         tt = _stats.talk_time(m.transcript or "")
@@ -305,6 +326,14 @@ class DetailPage(QWidget):
         actions = notes.get("action_items") or []
         if actions:
             self.notes_lay.addWidget(self._notes_heading("Action items"))
+            # legacy items (no 'confirmed' key) count as accepted
+            if any(isinstance(a, dict) and not a.get("confirmed", True) and not a.get("done")
+                   for a in actions):
+                hint = QLabel("Suggested by the AI — keep ✓ the real ones (they join your "
+                              "to-do list), edit ✎ to correct, or dismiss ✕.")
+                hint.setObjectName("Faint")
+                hint.setWordWrap(True)
+                self.notes_lay.addWidget(hint)
             for i, a in enumerate(actions):
                 self.notes_lay.addWidget(self._action_row(i, a))
 
@@ -323,39 +352,113 @@ class DetailPage(QWidget):
         lbl.setContentsMargins(0, 12, 0, 2)
         return lbl
 
+    def _mini_btn(self, text: str, tooltip: str, *, accent: bool = False) -> QPushButton:
+        b = QPushButton(text)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setToolTip(tooltip)
+        fg = self.theme.color("primary" if accent else "text_faint")
+        bg = self.theme.color("primary_soft" if accent else "surface_hover")
+        b.setStyleSheet(
+            f"QPushButton{{background:{bg}; color:{fg}; border:none; border-radius:8px;"
+            f"padding:2px 9px; font-size:12px; font-weight:700;}}"
+            f"QPushButton:hover{{background:{self.theme.color('primary_soft')};"
+            f"color:{self.theme.color('primary')};}}"
+        )
+        return b
+
+    def _action_label(self, a: dict, *, muted: bool = False) -> QLabel:
+        lbl = QLabel()
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setWordWrap(True)
+        task = _html.escape(a.get("task") or "")
+        if a.get("done"):
+            task = f'<span style="color:{self.theme.color("text_faint")}; text-decoration:line-through;">{task}</span>'
+        elif muted:
+            task = f'<span style="color:{self.theme.color("text_muted")};">{task}</span>'
+        owner = a.get("owner")
+        suffix = (
+            f' &middot; <b style="color:{self.theme.color("primary")};">{_html.escape(owner)}</b>'
+            if owner else ""
+        )
+        lbl.setText(task + suffix)
+        return lbl
+
     def _action_row(self, idx: int, a: dict) -> QWidget:
+        if not isinstance(a, dict):
+            a = {"task": str(a)}
         row = QWidget()
         rl = QHBoxLayout(row)
         rl.setContentsMargins(0, 1, 0, 1)
         rl.setSpacing(9)
-        cb = QCheckBox()
-        cb.setChecked(bool(a.get("done")))
-        cb.setCursor(Qt.CursorShape.PointingHandCursor)
-        lbl = QLabel()
-        lbl.setTextFormat(Qt.TextFormat.RichText)
-        lbl.setWordWrap(True)
-        owner = a.get("owner")
+        # done items render as resolved regardless of confirmation state
+        confirmed = bool(a.get("confirmed", True)) or bool(a.get("done"))
 
-        def render(done: bool) -> None:
-            task = _html.escape(a.get("task") or "")
-            if done:
-                task = f'<span style="color:{self.theme.color("text_faint")}; text-decoration:line-through;">{task}</span>'
-            suffix = (
-                f' &middot; <b style="color:{self.theme.color("primary")};">{_html.escape(owner)}</b>'
-                if owner else ""
-            )
-            lbl.setText(task + suffix)
+        if confirmed:
+            cb = QCheckBox()
+            cb.setChecked(bool(a.get("done")))
+            cb.setCursor(Qt.CursorShape.PointingHandCursor)
+            cb.setToolTip("Mark as completed")
+            lbl = self._action_label(a)
 
-        render(bool(a.get("done")))
+            def on_toggle(checked: bool, i=idx, item=a, label=lbl) -> None:
+                item["done"] = bool(checked)
+                self._persist_action(i, checked)
+                fresh = self._action_label(item)
+                label.setText(fresh.text())
+                fresh.deleteLater()
 
-        def on_toggle(checked: bool) -> None:
-            render(checked)
-            self._persist_action(idx, checked)
+            cb.toggled.connect(on_toggle)
+            rl.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
+            rl.addWidget(lbl, 1)
+        else:
+            from .widgets import make_chip
+            chip = make_chip("suggested", fg=self.theme.color("warning"),
+                             bg=self.theme.color("warning_soft"))
+            rl.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)
+            rl.addWidget(self._action_label(a, muted=True), 1)
+            keep = self._mini_btn("✓ Keep", "Accept as a real action item — it joins your to-do list",
+                                  accent=True)
+            keep.clicked.connect(lambda _=False, i=idx: self._confirm_action(i))
+            rl.addWidget(keep, 0, Qt.AlignmentFlag.AlignTop)
 
-        cb.toggled.connect(on_toggle)
-        rl.addWidget(cb, 0, Qt.AlignmentFlag.AlignTop)
-        rl.addWidget(lbl, 1)
+        edit = self._mini_btn("✎", "Edit this action item")
+        edit.clicked.connect(lambda _=False, i=idx, item=dict(a), r=row: self._begin_action_edit(r, i, item))
+        rl.addWidget(edit, 0, Qt.AlignmentFlag.AlignTop)
+        if not confirmed:
+            dismiss = self._mini_btn("✕", "Dismiss this suggestion")
+            dismiss.clicked.connect(lambda _=False, i=idx: self._dismiss_action(i))
+            rl.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignTop)
         return row
+
+    def _begin_action_edit(self, row: QWidget, idx: int, a: dict) -> None:
+        """Swap the row content for inline task/owner editors."""
+        rl = row.layout()
+        while rl.count():
+            item = rl.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        task_edit = QLineEdit(a.get("task") or "")
+        task_edit.setPlaceholderText("What needs doing")
+        owner_edit = QLineEdit(a.get("owner") or "")
+        owner_edit.setPlaceholderText("Owner (optional)")
+        owner_edit.setFixedWidth(150)
+        save = self._mini_btn("Save", "Save changes", accent=True)
+        cancel = self._mini_btn("Cancel", "Discard changes")
+
+        def commit() -> None:
+            self._apply_action_edit(idx, task_edit.text(), owner_edit.text())
+
+        save.clicked.connect(commit)
+        task_edit.returnPressed.connect(commit)
+        owner_edit.returnPressed.connect(commit)
+        cancel.clicked.connect(self.refresh)
+        rl.addWidget(task_edit, 1)
+        rl.addWidget(owner_edit)
+        rl.addWidget(save)
+        rl.addWidget(cancel)
+        task_edit.setFocus()
 
     def _bullet(self, text: str) -> QWidget:
         row = QWidget()
@@ -381,6 +484,44 @@ class DetailPage(QWidget):
             actions[idx]["done"] = bool(checked)
             notes["action_items"] = actions
             self.repo.update(self.meeting_id, notes_json=json.dumps(notes))
+
+    def _mutate_actions(self, fn) -> None:
+        """Load → mutate the action_items list → persist → re-render. Used by
+        accept/dismiss/edit, all of which change what the dashboard shows."""
+        if self.meeting_id is None:
+            return
+        m = self.repo.get(self.meeting_id)
+        notes = m.notes or {}
+        actions = notes.get("action_items") or []
+        fn(actions)
+        notes["action_items"] = actions
+        self.repo.update(self.meeting_id, notes_json=json.dumps(notes))
+        self.refresh()
+        self.shell.notify_data_changed()
+
+    def _confirm_action(self, idx: int) -> None:
+        def fn(actions):
+            if 0 <= idx < len(actions) and isinstance(actions[idx], dict):
+                actions[idx]["confirmed"] = True
+        self._mutate_actions(fn)
+
+    def _dismiss_action(self, idx: int) -> None:
+        def fn(actions):
+            if 0 <= idx < len(actions):
+                del actions[idx]
+        self._mutate_actions(fn)
+
+    def _apply_action_edit(self, idx: int, task: str, owner: str) -> None:
+        task = (task or "").strip()
+        if not task:  # an emptied task is a dismissal
+            self._dismiss_action(idx)
+            return
+
+        def fn(actions):
+            if 0 <= idx < len(actions) and isinstance(actions[idx], dict):
+                actions[idx]["task"] = task
+                actions[idx]["owner"] = (owner or "").strip() or None
+        self._mutate_actions(fn)
 
     # ---------- bookmarks ----------
     def _render_bookmarks(self, m) -> None:
@@ -428,8 +569,9 @@ class DetailPage(QWidget):
         if not prompt:
             QMessageBox.warning(self, "No action", "Pick an AI action (manage them in Settings → AI).")
             return
-        if not self.cfg.resolved_anthropic_key():
-            QMessageBox.warning(self, "No API key", "Add an Anthropic API key in Settings → AI first.")
+        from ..notes import service as notes_service
+        if not notes_service.ready(self.cfg):
+            QMessageBox.warning(self, "Notes AI not configured", notes_service.missing_hint(self.cfg))
             return
         name = self.action_combo.currentText()
         repo, cfg, mid = self.repo, self.cfg, self.meeting_id
@@ -437,12 +579,13 @@ class DetailPage(QWidget):
         self.run_action_btn.setEnabled(False)
 
         def job(_p):
-            from ..notes import actions, render
+            from ..notes import render
+            from ..notes import service as notes_service
             m = repo.get(mid)
             notes_text = render.to_plaintext(m.notes) if m.notes else ""
-            return actions.run_action(
-                prompt, transcript=m.transcript or "", notes_text=notes_text,
-                title=m.title or "", api_key=cfg.resolved_anthropic_key(), model=cfg.anthropic_model,
+            return notes_service.run_action(
+                prompt, cfg, transcript=m.transcript or "", notes_text=notes_text,
+                title=m.title or "",
             )
 
         self.worker = FuncWorker(job)
@@ -552,6 +695,8 @@ class DetailPage(QWidget):
         self.folder_btn.setIcon(self.theme.icon("folder", "text_muted", 16))
         self.delete_btn.setIcon(self.theme.icon("trash", "danger", 16))
         self.run_action_btn.setIcon(self.theme.icon("sparkles", "text_muted", 15))
+        self.share_btn.setIcon(self.theme.icon("upload", "text_muted", 16))
+        self.todoist_btn.setIcon(self.theme.icon("check-square", "text_muted", 16))
 
     # ---------- actions ----------
     def _run(self, job, label: str) -> None:
@@ -577,18 +722,19 @@ class DetailPage(QWidget):
     def _resummarise(self) -> None:
         if self.meeting_id is None:
             return
-        if not self.cfg.resolved_anthropic_key():
-            QMessageBox.warning(self, "No API key", "Add an Anthropic API key in Settings first.")
+        from ..notes import service as notes_service
+        if not notes_service.ready(self.cfg):
+            QMessageBox.warning(self, "Notes AI not configured", notes_service.missing_hint(self.cfg))
             return
         repo, cfg, mid = self.repo, self.cfg, self.meeting_id
 
         def job(progress):
-            from ..notes import anthropic_client
+            from ..notes import service as notes_service
             progress("Writing notes")
             m = repo.get(mid)
-            notes = anthropic_client.generate_notes(
-                m.transcript or "", api_key=cfg.resolved_anthropic_key(),
-                attendees=m.attendees, agenda=m.agenda, human_date=m.date_text, model=cfg.anthropic_model,
+            notes = notes_service.generate_notes(
+                m.transcript or "", cfg,
+                attendees=m.attendees, agenda=m.agenda, human_date=m.date_text,
                 extra_instructions=cfg.notes_instructions(m.template),
             )
             repo.update(mid, title=notes.title, notes_json=notes.model_dump_json(),
@@ -615,12 +761,26 @@ class DetailPage(QWidget):
         if QMessageBox.question(self, "Delete meeting", "Delete this meeting and its record?") \
                 == QMessageBox.StandardButton.Yes:
             m = self.repo.get(self.meeting_id)
-            if m.audio_dir and os.path.isdir(m.audio_dir):
+            if m.audio_dir and os.path.isdir(m.audio_dir) and self._is_recording_folder(m.audio_dir):
                 import shutil
                 shutil.rmtree(m.audio_dir, ignore_errors=True)  # audio + screenshots
             self.repo.delete(self.meeting_id)
+            self.meeting_id = None  # avoid a stale-id KeyError on later refresh()
             self.shell.notify_data_changed()
             self.shell.show_home()
+
+    @staticmethod
+    def _is_recording_folder(path: str) -> bool:
+        """Guard rmtree/startfile: only ever touch a per-meeting folder that
+        actually lives under the recordings root (defends against a tampered or
+        mis-set audio_dir turning Delete into arbitrary recursive deletion)."""
+        from ..paths import recordings_dir
+        try:
+            p = Path(path).resolve()
+            root = recordings_dir().resolve()
+            return root in p.parents and p.name.startswith("meeting_")
+        except OSError:
+            return False
 
     def _open_folder(self) -> None:
         if self.meeting_id is None:
@@ -628,6 +788,84 @@ class DetailPage(QWidget):
         m = self.repo.get(self.meeting_id)
         if m.audio_dir and os.path.isdir(m.audio_dir):
             os.startfile(m.audio_dir)  # noqa: S606
+
+    def _send_todoist(self) -> None:
+        """Create a Todoist task for every open action item (deduped by the
+        stored task id, so re-sending never duplicates)."""
+        if self.meeting_id is None:
+            return
+        if not (self.cfg.todoist_token or "").strip():
+            QMessageBox.information(
+                self, "Todoist not connected",
+                "Add your Todoist API token in Settings → General → Todoist first.\n"
+                "(Todoist → Settings → Integrations → Developer → API token.)")
+            return
+        repo, cfg, mid = self.repo, self.cfg, self.meeting_id
+        self.todoist_btn.setEnabled(False)
+        self.status_label.setText("Sending open action items to Todoist…")
+
+        def job(_p):
+            from ..integrations import todoist
+            m = repo.get(mid)
+            notes = m.notes or {}
+            sent, skipped = todoist.send_open_items(
+                cfg.todoist_token, notes, meeting_title=m.title or "Untitled",
+                date_text=m.date_text)
+            if sent:  # persist the todoist ids so a second click can't duplicate
+                repo.update(mid, notes_json=json.dumps(notes))
+            return sent, skipped
+
+        def done(result):
+            sent, skipped = result
+            msg = f"Sent {sent} task(s) to Todoist."
+            if skipped:
+                msg += f" {skipped} already sent earlier."
+            self.status_label.setText(msg)
+            self.todoist_btn.setEnabled(True)
+
+        def failed(msg):
+            self.status_label.setText(f"Todoist: {msg}")
+            self.todoist_btn.setEnabled(True)
+
+        self._todoist_worker = FuncWorker(job)
+        self._todoist_worker.done.connect(done)
+        self._todoist_worker.failed.connect(failed)
+        self._todoist_worker.start()
+
+    def _share_html(self) -> None:
+        """Export the meeting as a single self-contained HTML file to send around
+        — the local-first version of a share link."""
+        if self.meeting_id is None:
+            return
+        m = self.repo.get(self.meeting_id)
+        box = QMessageBox(self)
+        box.setWindowTitle("Share meeting")
+        box.setText("Export this meeting as a standalone HTML file you can send to anyone.")
+        notes_only = box.addButton("Notes only", QMessageBox.ButtonRole.AcceptRole)
+        with_tr = box.addButton("Notes + transcript", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        if not (m.transcript or "").strip():
+            with_tr.setEnabled(False)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked not in (notes_only, with_tr):
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..notes import share
+        safe = "".join(c for c in (m.title or "meeting") if c.isalnum() or c in " -_")[:60].strip() or "meeting"
+        path, _sel = QFileDialog.getSaveFileName(
+            self, "Save shareable file", f"{safe}.html", "Web page (*.html)")
+        if not path:
+            return
+        html_doc = share.to_share_html(m, include_transcript=(clicked is with_tr))
+        try:
+            Path(path).write_text(html_doc, encoding="utf-8")
+        except OSError as e:
+            QMessageBox.critical(self, "Could not save", str(e))
+            return
+        self.status_label.setText(f"Saved {Path(path).name} — opening preview…")
+        os.startfile(path)  # noqa: S606
 
     def _copy_summary(self) -> None:
         """Put the notes on the clipboard as rich HTML + clean plain text so they

@@ -42,9 +42,12 @@ class Meeting:
         if not self.notes_json:
             return None
         try:
-            return json.loads(self.notes_json)
+            parsed = json.loads(self.notes_json)
         except json.JSONDecodeError:
             return None
+        # a non-dict here (hand-edited DB, wrong-shape model output) must read as
+        # "no notes", not crash every consumer
+        return parsed if isinstance(parsed, dict) else None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Meeting":
@@ -99,7 +102,8 @@ class MeetingRepository:
 
     def close(self) -> None:
         try:
-            self.conn.close()
+            with self._lock:  # never yank the connection from under a worker mid-write
+                self.conn.close()
         except sqlite3.Error:
             pass
 
@@ -114,8 +118,8 @@ class MeetingRepository:
             )
             self.conn.commit()
             mid = cur.lastrowid
-        m = self.get(mid)
-        self._index_fts(m)
+            m = self.get(mid)
+            self._index_fts(m)  # same lock scope: no window for a racing delete
         return m
 
     def update(self, meeting_id: int, **fields: Any) -> None:
@@ -140,11 +144,13 @@ class MeetingRepository:
                 vals,
             )
             self.conn.commit()
-        if reindex:
-            try:
-                self._index_fts(self.get(meeting_id))
-            except KeyError:
-                pass
+            if reindex:
+                # inside the lock: a concurrent delete() can't interleave and
+                # leave an orphaned FTS row behind
+                try:
+                    self._index_fts(self.get(meeting_id))
+                except KeyError:
+                    pass
 
     def delete(self, meeting_id: int) -> None:
         with self._lock:
@@ -152,39 +158,70 @@ class MeetingRepository:
             self.conn.execute("DELETE FROM meetings_fts WHERE meeting_id = ?", (meeting_id,))
             self.conn.commit()
 
+    def recover_interrupted(self) -> int:
+        """Flip meetings left mid-flight by a crash / force-quit out of their
+        in-progress status so they don't sit stuck forever. Any saved audio stays
+        on disk, so the user can Re-transcribe. Returns the number reset."""
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE meetings SET status = 'Error', "
+                "error = COALESCE(NULLIF(error, ''), 'Interrupted — Earshot closed before this "
+                "finished. Open it and Re-transcribe to resume.'), "
+                "updated_at = datetime('now') "
+                "WHERE status IN ('Recording', 'Transcribing', 'Summarizing')"
+            )
+            self.conn.commit()
+            return cur.rowcount
+
     # --- full-text search ---
     @staticmethod
     def _searchable(m: "Meeting") -> str:
-        parts = [m.title or "", " ".join(m.attendees), m.agenda or "", m.transcript or ""]
+        # Defensive on shape: a hand-edited DB or wrong-shape model output must
+        # degrade to a partial index, never crash (this runs at startup).
+        parts = [m.title or "", " ".join(str(a) for a in m.attendees), m.agenda or "", m.transcript or ""]
         notes = m.notes
         if notes:
-            parts.append(notes.get("summary", ""))
-            for s in notes.get("sections") or []:
-                parts.append(s.get("heading", ""))
-                parts.extend(s.get("bullets") or [])
-            for a in notes.get("action_items") or []:
-                parts.append(a.get("task", ""))
+            parts.append(str(notes.get("summary") or ""))
+            sections = notes.get("sections")
+            for s in sections if isinstance(sections, list) else []:
+                if not isinstance(s, dict):
+                    continue
+                parts.append(str(s.get("heading") or ""))
+                bullets = s.get("bullets")
+                parts.extend(str(b) for b in (bullets if isinstance(bullets, list) else []))
+            actions = notes.get("action_items")
+            for a in actions if isinstance(actions, list) else []:
+                if isinstance(a, dict):
+                    parts.append(str(a.get("task") or ""))
         return "\n".join(p for p in parts if p)
 
     def _index_fts(self, m: "Meeting") -> None:
         with self._lock:
+            # skip if the row vanished (racing delete) — never resurrect a ghost
+            row = self.conn.execute("SELECT 1 FROM meetings WHERE id = ?", (m.id,)).fetchone()
             self.conn.execute("DELETE FROM meetings_fts WHERE meeting_id = ?", (m.id,))
-            self.conn.execute(
-                "INSERT INTO meetings_fts (meeting_id, body) VALUES (?, ?)", (m.id, self._searchable(m))
-            )
+            if row is not None:
+                self.conn.execute(
+                    "INSERT INTO meetings_fts (meeting_id, body) VALUES (?, ?)", (m.id, self._searchable(m))
+                )
             self.conn.commit()
 
     def _backfill_fts(self) -> None:
+        """Index only the meetings missing from FTS. One bad row must not block
+        startup, and an already-indexed library must cost ~nothing."""
         with self._lock:
             try:
-                n = self.conn.execute("SELECT count(*) FROM meetings_fts").fetchone()[0]
-                total = self.conn.execute("SELECT count(*) FROM meetings").fetchone()[0]
+                missing = [r[0] for r in self.conn.execute(
+                    "SELECT id FROM meetings WHERE id NOT IN "
+                    "(SELECT meeting_id FROM meetings_fts)"
+                ).fetchall()]
             except sqlite3.Error:
                 return
-        if n >= total:
-            return
-        for m in self.list(limit=100000):
-            self._index_fts(m)
+        for mid in missing:
+            try:
+                self._index_fts(self.get(mid))
+            except (KeyError, sqlite3.Error, ValueError, TypeError):
+                continue
 
     def search(self, query: str, limit: int = 300) -> list[int]:
         """Meeting ids whose content matches the query, ranked by relevance."""

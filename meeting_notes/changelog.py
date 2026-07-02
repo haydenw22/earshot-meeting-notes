@@ -19,6 +19,159 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.17.0", "2026-07-02", "Action items you control",
+        (
+            ("Changed", (
+                "AI-generated action items now arrive as SUGGESTIONS: keep ✓ the real ones (only "
+                "those join the Home to-do dashboard and Todoist), edit ✎ any item's wording or "
+                "owner, or dismiss ✕ the misses. Suggestions are marked \"(suggested)\" in copies "
+                "and shares. Items on existing meetings are treated as already accepted.",
+                "The default summary is much shorter — 1-2 tight sentences instead of a paragraph. "
+                "(Want it longer or different? Settings → AI → Custom instructions overrides it.)",
+            )),
+        ),
+    ),
+    Release(
+        "0.16.0", "2026-07-02", "Built for marathon meetings",
+        (
+            ("Added", (
+                "No more meeting-length limits on online transcription: files over a provider's cap "
+                "are automatically split at quiet moments, transcribed in parts, and stitched back "
+                "with exact timestamps — a 6-hour meeting just works.",
+                "Optional Opus upload format (Settings → Transcription): ~10 MB per hour of audio — "
+                "about 4× smaller than FLAC — with negligible accuracy impact. Roughly 2.5 hours now "
+                "fits in a single request even on capped providers.",
+                "Cloud transcription now sends both channels (you + them) in parallel, roughly halving "
+                "transcription wall-clock time on Groq, Mistral, OpenAI and Deepgram. (The home server "
+                "processes one at a time by design, so it stays sequential.)",
+            )),
+            ("Changed", (
+                "Echo cancellation and audio preparation now stream file-to-file with flat memory use "
+                "— multi-hour recordings can no longer exhaust RAM anywhere in the pipeline. The "
+                "streamed echo canceller is bit-identical to the previous implementation.",
+            )),
+        ),
+    ),
+    Release(
+        "0.15.0", "2026-07-02", "Cheaper transcription options",
+        (
+            ("Added", (
+                "One-click provider presets for online transcription: Groq Whisper large-v3-turbo "
+                "(~$0.04 per hour of audio — the cheapest accurate option), Mistral Voxtral Mini "
+                "(~$0.18/hr, top-tier accuracy, 3-hour uploads), Groq large-v3 and OpenAI whisper-1. "
+                "Pick one in Settings → Transcription and paste that provider's key in Settings → AI.",
+                "Compatibility with Mistral's stricter API (automatic parameter fallback), so "
+                "Voxtral works through the same OpenAI-compatible client.",
+            )),
+            ("Changed", (
+                "Transcription uploads are now FLAC instead of WAV — lossless but ~3× smaller, so "
+                "uploads are faster everywhere and roughly 40–60 minutes of speech now fits the "
+                "25 MB OpenAI/Groq cap (previously ~13 minutes).",
+                "Deepgram uploads stream from disk instead of loading the whole file into memory.",
+            )),
+        ),
+    ),
+    Release(
+        "0.14.0", "2026-07-02", "Todoist sync",
+        (
+            ("Added", (
+                "Send open action items to Todoist in one click from a meeting's page — each becomes "
+                "a task with the owner and meeting in its description. Items remember they've been "
+                "sent, so you can never create duplicates. Connect your token in Settings → General.",
+            )),
+        ),
+    ),
+    Release(
+        "0.13.0", "2026-07-02", "Pre-meeting briefs",
+        (
+            ("Added", (
+                "\"Prep brief from past meetings\" on the recording screen: Earshot finds your related "
+                "meetings (same people or template), and writes a short brief — what was decided last "
+                "time, what's still open, suggested talking points — straight into the agenda box, "
+                "which also gives the AI better context for this meeting's notes.",
+            )),
+        ),
+    ),
+    Release(
+        "0.12.0", "2026-07-02", "Share meetings as a file",
+        (
+            ("Added", (
+                "Share… on a meeting's page exports a beautiful, self-contained HTML file (notes, "
+                "action items, optionally the full transcript) that opens in any browser — send it to "
+                "anyone, no account needed. Prints cleanly to PDF too.",
+            )),
+        ),
+    ),
+    Release(
+        "0.11.0", "2026-07-02", "Bring your own AI",
+        (
+            ("Added", (
+                "Notes and AI actions can now run on ANY OpenAI-compatible model — including fully "
+                "local ones via Ollama, LM Studio or vLLM — instead of Claude. Pick the provider in "
+                "Settings → AI; with a local model, meetings never leave your machine at all. "
+                "(Ask Earshot still uses Claude.)",
+            )),
+        ),
+    ),
+    Release(
+        "0.10.0", "2026-07-02", "Never forget to record",
+        (
+            ("Added", (
+                "Call detection: when another app starts using your microphone (Zoom, Teams, a Meet "
+                "tab…), Earshot pops a small corner prompt offering to record — one click and it's "
+                "rolling with your saved devices. When the call ends mid-recording, it offers to stop "
+                "and process. Toggle in Settings → General; nothing is ever captured until you accept.",
+            )),
+        ),
+    ),
+    Release(
+        "0.9.0", "2026-07-02", "Bulletproof recordings",
+        (
+            ("Changed", (
+                "Recording finalisation is now streaming and crash-safe: audio is converted to WAV in "
+                "small blocks (flat memory even on multi-hour meetings — previously a 2-hour call could "
+                "need gigabytes of RAM and fail), every file is written atomically, and the raw capture "
+                "is only deleted after the WAVs are verified on disk. A failure mid-save can no longer "
+                "destroy the meeting.",
+                "In-progress audio now spools into the meeting's own folder (not the system temp dir), "
+                "so it lives on your chosen recordings drive.",
+                "On 5.1/7.1 output devices, the other side's audio is no longer quietened by the "
+                "surround downmix.",
+            )),
+            ("Added", (
+                "Crash recovery: if Earshot (or Windows) dies mid-recording, the next launch salvages "
+                "the captured audio into a playable, transcribable meeting automatically.",
+            )),
+        ),
+    ),
+    Release(
+        "0.8.0", "2026-07-02", "Hardening & polish",
+        (
+            ("Fixed", (
+                "Background tasks (transcription, imports, AI actions) can no longer crash the app "
+                "when they overlap or when you quit mid-task.",
+                "Meetings interrupted by a crash or force-quit are now recovered on the next launch "
+                "instead of getting stuck on \"Recording\" or \"Transcribing\" forever.",
+                "Your settings can no longer be lost to a half-written file; a corrupted config is "
+                "kept aside (not silently wiped) so nothing is destroyed.",
+                "If a custom recordings folder is on a disconnected drive, recordings fall back to the "
+                "default folder instead of losing the meeting.",
+                "Home-server transcription no longer hangs forever if the server wedges or Wi-Fi drops, "
+                "and the connection test no longer reports success against the wrong service.",
+                "A finished recording no longer keeps its identity, so editing attendees for the next "
+                "meeting can't overwrite the previous one.",
+            )),
+            ("Changed", (
+                "Security hardening ahead of open-sourcing: meeting content is treated as untrusted "
+                "data by the AI (resisting spoken \"prompt injection\"), AI-generated text is rendered "
+                "as plain text, and delete/webhook actions are guarded.",
+                "UI polish pass: clearer hover / pressed / focus / disabled states throughout, a "
+                "distinct green for completed meetings, a call-to-action on the empty home screen, and "
+                "tidier sliders, scrollbars and long-title handling.",
+            )),
+        ),
+    ),
+    Release(
         "0.7.0", "2026-06-29", "Cleaner speaker attribution",
         (
             ("Changed", (

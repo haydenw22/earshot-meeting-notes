@@ -13,16 +13,25 @@ from ..config import Config
 from . import deepgram_client, openai_client, whisper_client
 
 
-def transcribe(audio_path: str | Path, cfg: Config, *, timeout: Optional[float] = None) -> dict:
+def transcribe(audio_path: str | Path, cfg: Config, *, timeout: Optional[float] = None,
+               progress=None) -> dict:
     if cfg.transcription_provider == "online":
-        return openai_client.transcribe(
-            audio_path,
-            base_url=cfg.online_base_url,
-            api_key=cfg.resolved_online_key(),
-            model=cfg.online_model,
-            language=cfg.whisper_language,
-            timeout=timeout,
-        )
+        from . import chunker
+
+        def one(p):
+            return openai_client.transcribe(
+                p,
+                base_url=cfg.online_base_url,
+                api_key=cfg.resolved_online_key(),
+                model=cfg.online_model,
+                language=cfg.whisper_language,
+                timeout=timeout,
+            )
+
+        # Split at quiet points when over the provider caps (25 MB OpenAI/Groq,
+        # 3 h Mistral) — meeting length stops being limited by the provider.
+        return chunker.transcribe_chunked(audio_path, one, max_bytes=24_000_000,
+                                          progress=progress)
     if cfg.transcription_provider == "deepgram":
         return deepgram_client.transcribe(
             audio_path,

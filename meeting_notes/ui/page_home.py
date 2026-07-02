@@ -27,6 +27,7 @@ class MeetingCard(Card):
         super().__init__(shadow=True)
         self._on_click = on_click
         self._mid = meeting.id
+        self.setProperty("clickable", True)  # QSS: accent border on hover
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         lay = QHBoxLayout(self)
@@ -43,6 +44,7 @@ class MeetingCard(Card):
         mid.setSpacing(4)
         title = QLabel(meeting.title or "Untitled meeting")
         title.setObjectName("H3")
+        title.setTextFormat(Qt.TextFormat.PlainText)  # AI-generated title → no rich text
         title.setWordWrap(True)
         mid.addWidget(title)
         bits = [meeting.date_text or meeting.date_iso]
@@ -123,10 +125,22 @@ class HomePage(QWidget):
         t.setObjectName("H2")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
-        s = QLabel("Hit New recording to capture your first meeting.")
+        s = QLabel("Capture your mic and the other side on separate channels — notes write themselves.")
         s.setObjectName("Muted")
         s.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(s)
+        cta = QPushButton("  Start your first recording")
+        cta.setProperty("variant", "danger")
+        cta.setCursor(Qt.CursorShape.PointingHandCursor)
+        cta.setMinimumHeight(44)
+        cta.clicked.connect(lambda: self.shell.show_record())
+        self.empty_cta = cta
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(cta)
+        row.addStretch(1)
+        lay.addSpacing(6)
+        lay.addLayout(row)
         lay.addStretch(2)
         return w
 
@@ -162,7 +176,11 @@ class HomePage(QWidget):
             if not notes:
                 continue
             for i, a in enumerate(notes.get("action_items") or []):
-                if not a.get("done"):
+                if not isinstance(a, dict):
+                    continue
+                # only ACCEPTED items are real to-dos; AI suggestions wait on the
+                # meeting page until kept (legacy items without the key count as accepted)
+                if not a.get("done") and a.get("confirmed", True):
                     out.append({"meeting_id": m.id, "idx": i, "task": a.get("task") or "",
                                 "owner": a.get("owner"), "title": m.title or "Untitled"})
             if len(out) >= limit:

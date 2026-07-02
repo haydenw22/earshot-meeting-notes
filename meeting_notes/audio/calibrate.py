@@ -34,3 +34,20 @@ def estimate_delay_ms(me_48k: np.ndarray, them_48k: np.ndarray, *, max_ms: int =
         return 0.0
     best_lag = lags[mask][int(np.argmax(corr[mask]))]
     return float(best_lag) / RATE * 1000.0
+
+
+def estimate_delay_ms_files(me_path, them_path, *, max_ms: int = 500,
+                            window_secs: float = 12.0) -> float:
+    """File variant: reads ONLY the correlation window (~12 s) from each file,
+    so multi-hour recordings never get loaded into memory for calibration."""
+    import soundfile as sf
+
+    frames = int(window_secs * RATE)
+    with sf.SoundFile(str(me_path)) as a, sf.SoundFile(str(them_path)) as b:
+        me = a.read(frames, dtype="float32")
+        them = b.read(frames, dtype="float32")
+    if me.ndim == 2:
+        me = me[:, 0]
+    if them.ndim == 2:
+        them = them[:, 0]
+    return estimate_delay_ms(me, them, max_ms=max_ms, window_secs=window_secs)

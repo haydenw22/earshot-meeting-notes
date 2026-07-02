@@ -59,19 +59,20 @@ def transcribe(
         params["detect_language"] = "true"
 
     audio_path = Path(audio_path)
+    mime = {".wav": "audio/wav", ".flac": "audio/flac", ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4", ".ogg": "audio/ogg"}.get(audio_path.suffix.lower(), "audio/wav")
     try:
-        data = audio_path.read_bytes()
+        # stream from disk — a multi-hour file must not be materialised in RAM
+        with open(audio_path, "rb") as fh:
+            resp = httpx.post(
+                API_URL,
+                params=params,
+                headers={"Authorization": f"Token {api_key}", "Content-Type": mime},
+                content=fh,
+                timeout=_timeout(timeout),
+            )
     except OSError as e:
         raise DeepgramError(f"could not read audio file: {e}") from e
-
-    try:
-        resp = httpx.post(
-            API_URL,
-            params=params,
-            headers={"Authorization": f"Token {api_key}", "Content-Type": "audio/wav"},
-            content=data,
-            timeout=_timeout(timeout),
-        )
     except httpx.HTTPError as e:
         raise DeepgramError(f"could not reach Deepgram: {e}") from e
 

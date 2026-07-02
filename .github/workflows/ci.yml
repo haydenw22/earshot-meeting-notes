@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # Windows: PyAudioWPatch (WASAPI loopback) is Windows-only.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies (pinned)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+
+      - name: Byte-compile
+        run: python -m compileall -q meeting_notes tools tests
+
+      - name: Run tests (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tests/test_core.py
+          python tests/test_changelog.py
+          python tests/test_resilience.py
+          python tests/test_finalize.py
+          python tests/test_features2.py
+          python tests/test_transcription_options.py
+          python tests/test_longmeeting.py
+          python tests/test_action_items.py
+          python tests/test_vad.py
+          python tests/test_deepgram.py
+          python tests/test_overlay.py
+          python tests/test_input_warning.py
+          python tests/test_ui_smoke.py
