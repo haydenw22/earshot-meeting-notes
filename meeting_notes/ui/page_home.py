@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -73,6 +74,9 @@ class HomePage(QWidget):
         self.repo = repo
         self.cfg = cfg
         self.theme = theme
+        # folder filter for the card list: None = all, an int = that folder,
+        # "unfiled" = meetings with no folder
+        self._folder_filter = None
         self._build()
 
     def _build(self) -> None:
@@ -154,7 +158,16 @@ class HomePage(QWidget):
                 w.setParent(None)
                 w.deleteLater()
         meetings = self.repo.list()
-        self.count.setText(f"{len(meetings)} recorded" if meetings else "Nothing recorded yet")
+        folders = self.repo.list_folders()
+        # an emptied/deleted folder can no longer be the active filter
+        if isinstance(self._folder_filter, int) and self._folder_filter not in {f.id for f in folders}:
+            self._folder_filter = None
+        shown = self._filtered_meetings(meetings)
+        if self._folder_filter is None:
+            self.count.setText(f"{len(meetings)} recorded" if meetings else "Nothing recorded yet")
+        else:
+            label = self._filter_label(folders)
+            self.count.setText(f"{len(shown)} in {label}" if shown else f"Nothing recorded in {label} yet")
         has = bool(meetings)
         self.scroll.setVisible(has)
         self.empty.setVisible(not has)
@@ -163,10 +176,62 @@ class HomePage(QWidget):
                 pending = self._gather_pending(meetings)
                 if pending:
                     self.list_lay.addWidget(self._dashboard_card(pending))
-            for m in meetings:
+            if folders:
+                self.list_lay.addWidget(self._chip_row(folders, meetings))
+            for m in shown:
                 self.list_lay.addWidget(MeetingCard(m, self.theme, self.shell.open_meeting))
             self.list_lay.addStretch(1)
         self.apply_theme()
+
+    # ---------- folder filter chips ----------
+    def _filtered_meetings(self, meetings: list) -> list:
+        if self._folder_filter is None:
+            return meetings
+        if self._folder_filter == "unfiled":
+            return [m for m in meetings if m.folder_id is None]
+        return [m for m in meetings if m.folder_id == self._folder_filter]
+
+    def _filter_label(self, folders: list) -> str:
+        if self._folder_filter == "unfiled":
+            return "Unfiled"
+        for f in folders:
+            if f.id == self._folder_filter:
+                return f.name
+        return ""
+
+    def _chip_row(self, folders: list, meetings: list) -> QWidget:
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self._filter_chip("All", len(meetings), None))
+        for f in folders:
+            count = sum(1 for m in meetings if m.folder_id == f.id)
+            lay.addWidget(self._filter_chip(f.name, count, f.id, icon_color=f.color))
+        unfiled_count = sum(1 for m in meetings if m.folder_id is None)
+        lay.addWidget(self._filter_chip("Unfiled", unfiled_count, "unfiled"))
+        lay.addStretch(1)
+        return row
+
+    def _filter_chip(self, name: str, count: int, value, *, icon_color: str | None = None) -> QPushButton:
+        active = self._folder_filter == value
+        btn = QPushButton(f"  {name} ({count})" if icon_color else f"{name} ({count})")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if icon_color:
+            btn.setIcon(icons.icon("folder", icon_color, 14))
+        fg = self.theme.color("primary") if active else self.theme.color("text_muted")
+        bg = self.theme.color("primary_soft") if active else self.theme.color("surface_hover")
+        btn.setStyleSheet(
+            f"QPushButton{{background:{bg}; color:{fg}; border:none; border-radius:9px;"
+            f"padding:5px 12px; font-size:12px; font-weight:600;}}"
+            f"QPushButton:hover{{background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};}}"
+        )
+        btn.clicked.connect(lambda _=False, v=value: self._set_folder_filter(v))
+        return btn
+
+    def _set_folder_filter(self, value) -> None:
+        self._folder_filter = value
+        self.refresh()
 
     # ---------- pending action-items dashboard ----------
     def _gather_pending(self, meetings, limit: int = 40) -> list[dict]:
@@ -188,11 +253,14 @@ class HomePage(QWidget):
         return out[:limit]
 
     def _dashboard_card(self, pending: list[dict]) -> QWidget:
+        self._dash_pending = pending
         card = Card(shadow=True)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(18, 16, 18, 14)
         lay.setSpacing(8)
+
         head = QHBoxLayout()
+        head.setSpacing(6)
         ic = QLabel()
         ic.setPixmap(icons.pixmap("check-square", self.theme.color("primary"), 18))
         t = QLabel(f"To do — {len(pending)} pending action item" + ("s" if len(pending) != 1 else ""))
@@ -200,9 +268,37 @@ class HomePage(QWidget):
         head.addWidget(ic)
         head.addWidget(t)
         head.addStretch(1)
+        mark_btn = QPushButton("Mark all done")
+        mark_btn.setProperty("variant", "ghost")
+        mark_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        mark_btn.clicked.connect(self._mark_all_done)
+        clear_btn = QPushButton("Clear all")
+        clear_btn.setProperty("variant", "ghost")
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.clicked.connect(self._confirm_clear_all)
+        chevron_btn = QPushButton()
+        chevron_btn.setProperty("variant", "ghost")
+        chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        chevron_btn.setFixedSize(28, 28)
+        chevron_btn.setToolTip("Collapse" if not self.cfg.dashboard_collapsed else "Expand")
+        chevron_btn.clicked.connect(self._toggle_dashboard)
+        self._dash_chevron_btn = chevron_btn
+        head.addWidget(mark_btn)
+        head.addWidget(clear_btn)
+        head.addWidget(chevron_btn)
         lay.addLayout(head)
+
+        items_host = QWidget()
+        items_lay = QVBoxLayout(items_host)
+        items_lay.setContentsMargins(0, 0, 0, 0)
+        items_lay.setSpacing(8)
         for p in pending:
-            lay.addWidget(self._pending_row(p))
+            items_lay.addWidget(self._pending_row(p))
+        items_host.setVisible(not self.cfg.dashboard_collapsed)
+        self._dash_items_host = items_host
+        lay.addWidget(items_host)
+
+        self._set_dashboard_chevron_icon()
         return card
 
     def _pending_row(self, p: dict) -> QWidget:
@@ -218,7 +314,8 @@ class HomePage(QWidget):
         lbl.setWordWrap(True)
         owner = f' &middot; <b style="color:{self.theme.color("primary")};">{_html.escape(p["owner"])}</b>' if p["owner"] else ""
         src = f' <span style="color:{self.theme.color("text_faint")};">— {_html.escape(p["title"])}</span>'
-        lbl.setText(_html.escape(p["task"]) + owner + src)
+        from .page_detail import _md_to_html  # escapes, then **bold** → <b>
+        lbl.setText(_md_to_html(p["task"]) + owner + src)
         open_btn = QPushButton("Open")
         open_btn.setProperty("variant", "ghost")
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -239,6 +336,65 @@ class HomePage(QWidget):
             notes["action_items"] = actions
             self.repo.update(meeting_id, notes_json=json.dumps(notes))
         QTimer.singleShot(0, self.refresh)  # rebuild after the signal settles
+
+    def _toggle_dashboard(self) -> None:
+        self.cfg.dashboard_collapsed = not self.cfg.dashboard_collapsed
+        self.cfg.save()
+        host = getattr(self, "_dash_items_host", None)
+        if host is not None:
+            host.setVisible(not self.cfg.dashboard_collapsed)
+        self._set_dashboard_chevron_icon()
+
+    def _set_dashboard_chevron_icon(self) -> None:
+        btn = getattr(self, "_dash_chevron_btn", None)
+        if btn is None:
+            return
+        collapsed = self.cfg.dashboard_collapsed
+        btn.setIcon(self.theme.icon("chevron-right" if collapsed else "chevron-down", "text_muted", 16))
+        btn.setToolTip("Expand" if collapsed else "Collapse")
+
+    def _mark_all_done(self) -> None:
+        """Mark every currently-listed pending item done — grouped per meeting
+        (one repo.update each) so a meeting with several open items only writes once."""
+        by_meeting: dict[int, list[int]] = {}
+        for p in getattr(self, "_dash_pending", []):
+            by_meeting.setdefault(p["meeting_id"], []).append(p["idx"])
+        for mid, idxs in by_meeting.items():
+            m = self.repo.get(mid)
+            notes = m.notes or {}
+            actions = notes.get("action_items") or []
+            for idx in idxs:
+                if 0 <= idx < len(actions):
+                    actions[idx]["done"] = True
+            notes["action_items"] = actions
+            self.repo.update(mid, notes_json=json.dumps(notes))
+        QTimer.singleShot(0, self.refresh)
+
+    def _confirm_clear_all(self) -> None:
+        n = len(getattr(self, "_dash_pending", []))
+        if QMessageBox.question(
+            self, "Clear all",
+            f"Delete all {n} pending action items from their meetings?",
+        ) == QMessageBox.StandardButton.Yes:
+            self._clear_all_pending()
+
+    def _clear_all_pending(self) -> None:
+        """Delete every currently-listed pending item from its meeting's notes —
+        grouped per meeting (one repo.update each), deleting by descending index
+        within a meeting so earlier deletions don't shift later indices."""
+        by_meeting: dict[int, list[int]] = {}
+        for p in getattr(self, "_dash_pending", []):
+            by_meeting.setdefault(p["meeting_id"], []).append(p["idx"])
+        for mid, idxs in by_meeting.items():
+            m = self.repo.get(mid)
+            notes = m.notes or {}
+            actions = notes.get("action_items") or []
+            for idx in sorted(idxs, reverse=True):
+                if 0 <= idx < len(actions):
+                    del actions[idx]
+            notes["action_items"] = actions
+            self.repo.update(mid, notes_json=json.dumps(notes))
+        QTimer.singleShot(0, self.refresh)
 
     def apply_theme(self) -> None:
         self.new_btn.setIcon(self.theme.icon("record", "on_danger", 16))

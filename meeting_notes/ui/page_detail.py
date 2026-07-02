@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -166,25 +167,28 @@ class DetailPage(QWidget):
         self.copy_btn.setProperty("variant", "primary")
         self.share_btn = self._action("Share…", self._share_html)
         self.todoist_btn = self._action("To Todoist", self._send_todoist)
-        self.resummarise_btn = self._action("Re-summarise", self._resummarise)
-        self.reprocess_btn = self._action("Re-transcribe", self._reprocess)
-        self.folder_btn = self._action("Folder", self._open_folder)
-        self.folder_btn.setToolTip("Open this meeting's audio folder")
+        self.more_btn = self._action("More", None)
         self.delete_btn = self._action("Delete", self._delete)
         btns.addWidget(self.copy_btn)
         btns.addWidget(self.share_btn)
         btns.addWidget(self.todoist_btn)
-        btns.addWidget(self.resummarise_btn)
-        btns.addWidget(self.reprocess_btn)
-        btns.addWidget(self.folder_btn)
         btns.addStretch(1)
+        btns.addWidget(self.more_btn)
         btns.addWidget(self.delete_btn)
         root.addLayout(btns)
+
+        self.more_menu = QMenu(self.more_btn)
+        self.act_resummarise = self.more_menu.addAction("Re-summarise", self._resummarise)
+        self.act_reprocess = self.more_menu.addAction("Re-transcribe", self._reprocess)
+        self.act_folder = self.more_menu.addAction("Open audio folder", self._open_folder)
+        self.move_menu = self.more_menu.addMenu("Move to folder")
+        self.more_btn.setMenu(self.more_menu)
 
     def _action(self, text: str, slot) -> QPushButton:
         b = QPushButton(text)
         b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.clicked.connect(slot)
+        if slot is not None:
+            b.clicked.connect(slot)
         return b
 
     # ---------- data ----------
@@ -234,11 +238,60 @@ class DetailPage(QWidget):
             "Create a Todoist task for each accepted open action item"
             if has_open else "No accepted open action items to send (keep ✓ suggestions first)"
         )
-        self.resummarise_btn.setEnabled(bool(m.transcript))
-        self.reprocess_btn.setEnabled(bool(m.audio_dir))
-        self.folder_btn.setEnabled(bool(m.audio_dir))
+        self.act_resummarise.setEnabled(bool(m.transcript))
+        self.act_reprocess.setEnabled(bool(m.audio_dir))
+        self.act_folder.setEnabled(bool(m.audio_dir))
+        self._populate_move_menu(m)
         self.run_action_btn.setEnabled(bool(m.transcript or m.notes))
         self.apply_theme()
+
+    # ---------- move to folder ----------
+    def _populate_move_menu(self, m) -> None:
+        self.move_menu.clear()
+        no_folder_act = self.move_menu.addAction("No folder")
+        no_folder_act.setCheckable(True)
+        no_folder_act.setChecked(m.folder_id is None)
+        no_folder_act.triggered.connect(lambda _=False: self._move_to_folder(None))
+
+        folders = self.repo.list_folders()
+        if folders:
+            self.move_menu.addSeparator()
+            for f in folders:
+                act = self.move_menu.addAction(self._folder_icon(f.color), f.name)
+                act.setCheckable(True)
+                act.setChecked(m.folder_id == f.id)
+                act.triggered.connect(lambda _=False, fid=f.id: self._move_to_folder(fid))
+
+        self.move_menu.addSeparator()
+        new_act = self.move_menu.addAction("New folder…")
+        new_act.triggered.connect(self._move_to_new_folder)
+
+    def _folder_icon(self, hexcolor: str):
+        from PySide6.QtGui import QColor, QIcon, QPainter
+        pm = QPixmap(14, 14)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setBrush(QColor(hexcolor))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, 14, 14, 3, 3)
+        painter.end()
+        return QIcon(pm)
+
+    def _move_to_folder(self, folder_id) -> None:
+        if self.meeting_id is None:
+            return
+        self.repo.update(self.meeting_id, folder_id=folder_id)
+        self.refresh()
+        self.shell.notify_data_changed()
+
+    def _move_to_new_folder(self) -> None:
+        from .folder_dialog import ask_new_folder
+        result = ask_new_folder(self, self.theme)
+        if result is None:
+            return
+        name, color = result
+        folder = self.repo.create_folder(name, color)
+        self._move_to_folder(folder.id)
 
     def _meta_chip(self, text: str):
         from .widgets import make_chip
@@ -312,9 +365,11 @@ class DetailPage(QWidget):
             return
 
         if notes.get("summary"):
-            s = QLabel(notes["summary"])
+            # _md_to_html escapes first, so rich text stays injection-safe while
+            # **bold** actually renders instead of showing literal asterisks
+            s = QLabel(_md_to_html(notes["summary"]))
             s.setWordWrap(True)
-            s.setTextFormat(Qt.TextFormat.PlainText)  # AI summary is untrusted → no rich text
+            s.setTextFormat(Qt.TextFormat.RichText)
             self.notes_lay.addWidget(s)
 
         tt = _stats.talk_time(m.transcript or "")
@@ -366,11 +421,24 @@ class DetailPage(QWidget):
         )
         return b
 
+    def _mini_icon_btn(self, icon_name: str, tooltip: str) -> QPushButton:
+        """A compact flat icon-only button for row-level actions (edit, dismiss)."""
+        b = QPushButton()
+        b.setIcon(self.theme.icon(icon_name, "text_muted", 13))
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setFixedSize(26, 22)
+        b.setStyleSheet(
+            "QPushButton{background:transparent; border:none; border-radius:8px; padding:0;}"
+            f"QPushButton:hover{{background:{self.theme.color('surface_hover')};}}"
+        )
+        return b
+
     def _action_label(self, a: dict, *, muted: bool = False) -> QLabel:
         lbl = QLabel()
         lbl.setTextFormat(Qt.TextFormat.RichText)
         lbl.setWordWrap(True)
-        task = _html.escape(a.get("task") or "")
+        task = _md_to_html(a.get("task") or "")  # escapes, then **bold** → <b>
         if a.get("done"):
             task = f'<span style="color:{self.theme.color("text_faint")}; text-decoration:line-through;">{task}</span>'
         elif muted:
@@ -421,11 +489,11 @@ class DetailPage(QWidget):
             keep.clicked.connect(lambda _=False, i=idx: self._confirm_action(i))
             rl.addWidget(keep, 0, Qt.AlignmentFlag.AlignTop)
 
-        edit = self._mini_btn("✎", "Edit this action item")
+        edit = self._mini_icon_btn("pencil", "Edit this action item")
         edit.clicked.connect(lambda _=False, i=idx, item=dict(a), r=row: self._begin_action_edit(r, i, item))
         rl.addWidget(edit, 0, Qt.AlignmentFlag.AlignTop)
         if not confirmed:
-            dismiss = self._mini_btn("✕", "Dismiss this suggestion")
+            dismiss = self._mini_icon_btn("x", "Dismiss this suggestion")
             dismiss.clicked.connect(lambda _=False, i=idx: self._dismiss_action(i))
             rl.addWidget(dismiss, 0, Qt.AlignmentFlag.AlignTop)
         return row
@@ -608,17 +676,23 @@ class DetailPage(QWidget):
         dlg.setWindowTitle(title)
         dlg.setMinimumSize(560, 460)
         v = QVBoxLayout(dlg)
-        edit = QPlainTextEdit(text)
-        edit.setReadOnly(True)
-        v.addWidget(edit)
+        browser = QTextBrowser()
+        browser.setReadOnly(True)
+        browser.setOpenExternalLinks(False)
+        browser.document().setMarkdown(text)
+        v.addWidget(browser)
         bar = QHBoxLayout()
         copy = QPushButton("Copy")
         copy.setProperty("variant", "primary")
         copy.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def do_copy():
+            from PySide6.QtCore import QMimeData
             from PySide6.QtWidgets import QApplication
-            QApplication.clipboard().setText(text)
+            mime = QMimeData()
+            mime.setHtml(browser.document().toHtml())
+            mime.setText(browser.document().toPlainText())
+            QApplication.clipboard().setMimeData(mime)
             copy.setText("Copied ✓")
 
         copy.clicked.connect(do_copy)
@@ -690,19 +764,20 @@ class DetailPage(QWidget):
     def apply_theme(self) -> None:
         self.back_btn.setIcon(self.theme.icon("chevron-left", "text_muted", 18))
         self.copy_btn.setIcon(self.theme.icon("copy", "on_primary", 16))
-        self.resummarise_btn.setIcon(self.theme.icon("sparkles", "text_muted", 16))
-        self.reprocess_btn.setIcon(self.theme.icon("refresh", "text_muted", 16))
-        self.folder_btn.setIcon(self.theme.icon("folder", "text_muted", 16))
+        self.more_btn.setIcon(self.theme.icon("chevron-down", "text_muted", 14))
         self.delete_btn.setIcon(self.theme.icon("trash", "danger", 16))
         self.run_action_btn.setIcon(self.theme.icon("sparkles", "text_muted", 15))
         self.share_btn.setIcon(self.theme.icon("upload", "text_muted", 16))
         self.todoist_btn.setIcon(self.theme.icon("check-square", "text_muted", 16))
+        self.act_resummarise.setIcon(self.theme.icon("sparkles", "text_muted", 16))
+        self.act_reprocess.setIcon(self.theme.icon("refresh", "text_muted", 16))
+        self.act_folder.setIcon(self.theme.icon("folder", "text_muted", 16))
 
     # ---------- actions ----------
     def _run(self, job, label: str) -> None:
         self.status_label.setText(f"{label}…")
-        for b in (self.resummarise_btn, self.reprocess_btn):
-            b.setEnabled(False)
+        for a in (self.act_resummarise, self.act_reprocess):
+            a.setEnabled(False)
         self.worker = FuncWorker(job)
         self.worker.progress.connect(self.status_label.setText)
         self.worker.done.connect(lambda _r: self._after())

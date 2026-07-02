@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,8 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..util.dates import iso_date
+from . import icons
 from .widgets import Card
 from .workers import FuncWorker
+
+_RECENT_MEETINGS_LIMIT = 15
 
 
 class AskPage(QWidget):
@@ -70,6 +74,17 @@ class AskPage(QWidget):
         self._empty = self._empty_state()
         self.chat_lay.insertWidget(0, self._empty)
 
+        scope_row = QHBoxLayout()
+        scope_row.setSpacing(8)
+        scope_lbl = QLabel("Search:")
+        scope_lbl.setObjectName("Muted")
+        self.scope_combo = QComboBox()
+        self.scope_combo.setMinimumWidth(220)
+        scope_row.addWidget(scope_lbl)
+        scope_row.addWidget(self.scope_combo)
+        scope_row.addStretch(1)
+        root.addLayout(scope_row)
+
         row = QHBoxLayout()
         row.setSpacing(10)
         self.input = QLineEdit()
@@ -103,14 +118,55 @@ class AskPage(QWidget):
 
     def on_shown(self) -> None:
         self.input.setFocus()
+        self._populate_scope_combo()
+
+    # ---------- scope (which meetings to search) ----------
+    def _populate_scope_combo(self) -> None:
+        current = self.scope_combo.currentData() if self.scope_combo.count() else None
+        self.scope_combo.blockSignals(True)
+        self.scope_combo.clear()
+        self.scope_combo.addItem("All meetings", None)
+        for f in self.repo.list_folders():
+            idx = self.scope_combo.count()
+            self.scope_combo.addItem(f.name, ("folder", f.id))
+            self.scope_combo.setItemIcon(idx, icons.icon("folder", f.color, 16))
+        self.scope_combo.addItem("Unfiled", "unfiled")
+        self.scope_combo.insertSeparator(self.scope_combo.count())
+        recent = self.repo.list(limit=_RECENT_MEETINGS_LIMIT)
+        for m in recent:
+            idx = self.scope_combo.count()
+            self.scope_combo.addItem(m.title or "Untitled meeting", ("meeting", m.id))
+            self.scope_combo.setItemIcon(idx, icons.icon("file", self.theme.color("text_muted"), 16))
+        if current is not None:
+            found = self.scope_combo.findData(current)
+            if found >= 0:
+                self.scope_combo.setCurrentIndex(found)
+        self.scope_combo.blockSignals(False)
+
+    @staticmethod
+    def scoped_meetings(meetings: list, scope) -> list:
+        """Filter `meetings` (from repo.list()) down to the ones matching a
+        scope-combo value: None = all, ('folder', id), 'unfiled', or ('meeting', id)."""
+        if scope is None:
+            return list(meetings)
+        if scope == "unfiled":
+            return [m for m in meetings if m.folder_id is None]
+        if isinstance(scope, tuple) and len(scope) == 2:
+            kind, value = scope
+            if kind == "folder":
+                return [m for m in meetings if m.folder_id == value]
+            if kind == "meeting":
+                return [m for m in meetings if m.id == value]
+        return list(meetings)
 
     # ---------- send / receive ----------
     def _send(self) -> None:
         q = self.input.text().strip()
         if not q or (self.worker and self.worker.isRunning()):
             return
-        if not self.cfg.resolved_anthropic_key():
-            QMessageBox.warning(self, "No API key", "Add an Anthropic API key in Settings → Notes first.")
+        from ..notes import service as notes_service
+        if not notes_service.ready(self.cfg):
+            QMessageBox.warning(self, "AI not configured", notes_service.missing_hint(self.cfg))
             return
         if self._empty is not None:
             self._empty.setParent(None)
@@ -122,11 +178,12 @@ class AskPage(QWidget):
         self._set_busy(True)
 
         repo, cfg, today = self.repo, self.cfg, iso_date()
+        scope = self.scope_combo.currentData() if self.scope_combo.count() else None
 
         def job(_progress):
             from ..qa import ask
-            return ask.answer(q, meetings=repo.list(), api_key=cfg.resolved_anthropic_key(),
-                              model=cfg.anthropic_model, today=today)
+            meetings = AskPage.scoped_meetings(repo.list(), scope)
+            return ask.answer(q, meetings=meetings, cfg=cfg, today=today)
 
         self.worker = FuncWorker(job)
         self.worker.done.connect(lambda ans, t=thinking: self._on_answer(ans, t))

@@ -34,6 +34,14 @@ CREATE INDEX IF NOT EXISTS idx_meetings_status ON meetings(status);
 
 -- Full-text search over each meeting's searchable text (kept in sync by the repo).
 CREATE VIRTUAL TABLE IF NOT EXISTS meetings_fts USING fts5(meeting_id UNINDEXED, body);
+
+-- Colour-coded folders for organising meetings (e.g. one per client/team).
+CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#6366F1',
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -52,6 +60,7 @@ _MIGRATIONS = {
     "agenda": "ALTER TABLE meetings ADD COLUMN agenda TEXT",
     "template": "ALTER TABLE meetings ADD COLUMN template TEXT",
     "bookmarks": "ALTER TABLE meetings ADD COLUMN bookmarks TEXT",
+    "folder_id": "ALTER TABLE meetings ADD COLUMN folder_id INTEGER",
 }
 
 

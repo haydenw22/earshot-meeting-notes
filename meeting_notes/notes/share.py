@@ -68,7 +68,7 @@ def to_share_html(m, *, include_transcript: bool = False) -> str:
         parts.append(f"<div>{chips}</div>")
 
     if notes.get("summary"):
-        parts.append(f"<p>{_html.escape(notes['summary'])}</p>")
+        parts.append(f"<p>{_bold_html(notes['summary'])}</p>")
 
     actions = notes.get("action_items") or []
     if actions:
@@ -78,7 +78,7 @@ def to_share_html(m, *, include_transcript: bool = False) -> str:
                 continue
             done = bool(a.get("done"))
             box = "&#9745;" if done else "&#9744;"
-            task = _html.escape(a.get("task") or "")
+            task = _bold_html(a.get("task") or "")
             owner = f' · <span class="owner">{_html.escape(a["owner"])}</span>' if a.get("owner") else ""
             cls = ' class="done"' if done else ""
             sug = "" if a.get("confirmed", True) or done else ' <span class="done">(suggested)</span>'

@@ -4,6 +4,26 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] — 2026-07-03 · Folders & fit-and-finish
+
+### Added
+
+- Folders: organise meetings by client, team or project — colour-coded (8 colours), in their own collapsible sidebar section. Pick or create a folder when starting a recording, move meetings later (More → Move to folder, or drag-and-drop in the sidebar), and filter the home page by folder.
+- Ask Earshot can now be scoped to a folder, a single meeting, or everything.
+- Prep briefs have an Advanced mode (Settings → AI): choose a folder or hand-pick the past meetings the brief is built from.
+- The home to-do list is collapsible and gained Mark-all-done and Clear-all actions.
+
+### Changed
+
+- Pick the AI model that powers the whole app — Anthropic, OpenAI (or compatible cloud), or a local server — in one place, with only the chosen provider's settings shown. Keys for every provider stay saved when you switch. Ask Earshot now follows this choice too (it was Claude-only).
+- **Bold** text now renders properly everywhere — meeting pages, the to-do list, copied notes, shared HTML — and AI-action results (like follow-up emails) display as formatted text instead of raw markdown.
+
+### Fixed
+
+- Editing an action item no longer makes it vanish — it now edits in place, and the edit button is a proper pencil icon.
+- The meeting-page buttons no longer squash on narrow windows (rarely-used actions moved into the More menu).
+- Home and a meeting no longer show as selected in the sidebar at the same time.
+
 ## [0.17.0] — 2026-07-02 · Action items you control
 
 ### Changed

@@ -82,13 +82,25 @@ def main() -> int:
     cfg.anthropic_api_key = ""
     os.environ.pop("ANTHROPIC_API_KEY", None)
     check("anthropic not ready without key", not notes_service.ready(cfg))
+    # "openai" (S3: hosted OpenAI-compatible cloud) needs base url + model + key.
     cfg.notes_provider = "openai"
-    cfg.llm_base_url = "http://localhost:11434/v1"
+    cfg.llm_base_url = "https://api.openai.com/v1"
     cfg.llm_model = ""
+    cfg.llm_api_key = ""
     check("openai not ready without model", not notes_service.ready(cfg))
-    cfg.llm_model = "llama3.1"
-    check("openai ready with url+model (no key needed)", notes_service.ready(cfg))
+    cfg.llm_model = "gpt-4o-mini"
+    check("openai not ready without key", not notes_service.ready(cfg))
+    cfg.llm_api_key = "sk-x"
+    check("openai ready with url+model+key", notes_service.ready(cfg))
     check("hint mentions settings", "Settings" in notes_service.missing_hint(cfg))
+    # "local" (S3: fully local server) needs base url + model but NOT a key.
+    cfg.notes_provider = "local"
+    cfg.local_llm_base_url = "http://localhost:11434/v1"
+    cfg.local_llm_model = ""
+    check("local not ready without model", not notes_service.ready(cfg))
+    cfg.local_llm_model = "llama3.1"
+    check("local ready with url+model (no key needed)", notes_service.ready(cfg))
+    check("local hint mentions settings", "Settings" in notes_service.missing_hint(cfg))
 
     print("== share HTML export ==")
     m = Meeting(id=7, title="Budget sync", date_text="2 Jul 2026", attendees=["Hayden", "Sam"],

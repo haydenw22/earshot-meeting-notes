@@ -1,11 +1,11 @@
-"""Application shell: a sidebar (logo, New-recording CTA, search, nav, meetings
-list, theme toggle) plus a stacked content area. Coordinates navigation and
-broadcasts theme changes to every page.
+"""Application shell: a sidebar (logo, New-recording CTA, search, nav, folders
+tree, meetings list, theme toggle) plus a stacked content area. Coordinates
+navigation and broadcasts theme changes to every page.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -14,21 +14,130 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
+    QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from .. import __version__
 from . import icons, logo
+from .folder_dialog import ask_new_folder, ask_rename_folder
 from .page_ask import AskPage
 from .page_detail import DetailPage
 from .page_home import HomePage
 from .page_record import RecordPage
 from .page_settings import SettingsPage
+from .widgets import FOLDER_COLORS
+
+_MEETING_MIME = "application/x-earshot-meeting"
+
+
+class _MeetingList(QListWidget):
+    """The unfiled-meetings list — draggable onto a folder in the tree above,
+    and a valid drop target for a meeting dragged out of a folder (= unfile)."""
+
+    meeting_dropped = Signal(int, object)  # meeting_id, folder_id (always None here)
+
+    def mimeTypes(self) -> list[str]:
+        return [_MEETING_MIME]
+
+    def mimeData(self, items):  # noqa: N802 (Qt override)
+        mid = items[0].data(Qt.ItemDataRole.UserRole) if items else None
+        mime = QMimeData()
+        if mid is not None:
+            mime.setData(_MEETING_MIME, str(int(mid)).encode("utf-8"))
+        return mime
+
+    def dragEnterEvent(self, event):  # noqa: N802 (Qt override)
+        if event.mimeData().hasFormat(_MEETING_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):  # noqa: N802 (Qt override)
+        if event.mimeData().hasFormat(_MEETING_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802 (Qt override)
+        mime = event.mimeData()
+        if not mime.hasFormat(_MEETING_MIME):
+            super().dropEvent(event)
+            return
+        try:
+            mid = int(bytes(mime.data(_MEETING_MIME)).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            event.ignore()
+            return
+        self.meeting_dropped.emit(mid, None)
+        event.acceptProposedAction()
+
+
+class _FolderTree(QTreeWidget):
+    """The folders tree — accepts a dropped meeting id (files it), and lets a
+    meeting child be dragged back out (unfiles it)."""
+
+    meeting_dropped = Signal(int, object)  # meeting_id, folder_id (None = unfile)
+
+    def mimeTypes(self) -> list[str]:
+        return [_MEETING_MIME]
+
+    def mimeData(self, items):  # noqa: N802 (Qt override)
+        mime = QMimeData()
+        if items:
+            kind, payload = items[0].data(0, Qt.ItemDataRole.UserRole)
+            if kind == "meeting":
+                mime.setData(_MEETING_MIME, str(int(payload)).encode("utf-8"))
+        return mime
+
+    def dragEnterEvent(self, event):  # noqa: N802 (Qt override)
+        if event.mimeData().hasFormat(_MEETING_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):  # noqa: N802 (Qt override)
+        if event.mimeData().hasFormat(_MEETING_MIME):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):  # noqa: N802 (Qt override)
+        mime = event.mimeData()
+        if not mime.hasFormat(_MEETING_MIME):
+            super().dropEvent(event)
+            return
+        try:
+            mid = int(bytes(mime.data(_MEETING_MIME)).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            event.ignore()
+            return
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        item = self.itemAt(pos)
+        folder_id = None
+        if item is not None:
+            kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
+            if kind == "folder":
+                folder_id = payload
+            elif kind == "meeting":
+                parent = item.parent()
+                if parent is not None:
+                    pkind, ppayload = parent.data(0, Qt.ItemDataRole.UserRole)
+                    if pkind == "folder":
+                        folder_id = ppayload
+        if folder_id is not None:
+            self.meeting_dropped.emit(mid, folder_id)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class Shell(QMainWindow):
@@ -178,14 +287,57 @@ class Shell(QMainWindow):
         self.ask_btn = self._nav_button("Ask Earshot", self.show_ask)
         lay.addWidget(self.ask_btn)
 
+        # ---- FOLDERS section ----
+        folders_head = QHBoxLayout()
+        folders_head.setSpacing(4)
+        folders_sect = QLabel("FOLDERS")
+        folders_sect.setObjectName("SectionLabel")
+        folders_head.addWidget(folders_sect)
+        folders_head.addStretch(1)
+        self.new_folder_btn = QToolButton()
+        self.new_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_folder_btn.setToolTip("New folder")
+        self.new_folder_btn.clicked.connect(self._new_folder)
+        folders_head.addWidget(self.new_folder_btn)
+        self.folders_chevron_btn = QToolButton()
+        self.folders_chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.folders_chevron_btn.clicked.connect(self._toggle_folders_collapsed)
+        folders_head.addWidget(self.folders_chevron_btn)
+        lay.addLayout(folders_head)
+
+        self.folder_tree = _FolderTree()
+        self.folder_tree.setHeaderHidden(True)
+        self.folder_tree.setIndentation(14)
+        self.folder_tree.setRootIsDecorated(True)
+        self.folder_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.folder_tree.itemClicked.connect(self._on_tree_click)
+        self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
+        # drag & drop: a meeting dragged out of a folder lands back on the list
+        self.folder_tree.setDragEnabled(True)
+        self.folder_tree.setAcceptDrops(True)
+        self.folder_tree.setDropIndicatorShown(True)
+        self.folder_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.folder_tree.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
+        self.folder_tree.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
+        lay.addWidget(self.folder_tree)
+
         sect = QLabel("MEETING NOTES")
         sect.setObjectName("SectionLabel")
         lay.addWidget(sect)
 
-        self.meeting_list = QListWidget()
+        self.meeting_list = _MeetingList()
         self.meeting_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.meeting_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.meeting_list.itemClicked.connect(self._on_list_click)
+        # drag & drop: a meeting dragged here from a folder becomes unfiled
+        self.meeting_list.setDragEnabled(True)
+        self.meeting_list.setAcceptDrops(True)
+        self.meeting_list.setDropIndicatorShown(True)
+        self.meeting_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.meeting_list.setDragDropMode(QListWidget.DragDropMode.DragDrop)
+        self.meeting_list.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
         lay.addWidget(self.meeting_list, 1)
 
         # bottom controls
@@ -216,30 +368,49 @@ class Shell(QMainWindow):
         self.ask_btn.setChecked(which == "ask")
         self.settings_btn.setChecked(which == "settings")
 
+    def _clear_selections(self) -> None:
+        """Selection hygiene: only one of {list, tree} should ever show a
+        highlighted row at a time."""
+        if hasattr(self, "meeting_list"):
+            self.meeting_list.clearSelection()
+        if hasattr(self, "folder_tree"):
+            self.folder_tree.clearSelection()
+
     def show_home(self) -> None:
         self.home.refresh()
         self.stack.setCurrentWidget(self.home)
         self._set_active("home")
+        self._clear_selections()
 
     def show_ask(self) -> None:
         self.ask.on_shown()
         self.stack.setCurrentWidget(self.ask)
         self._set_active("ask")
+        self._clear_selections()
 
     def show_record(self) -> None:
         self.record.on_shown()
         self.stack.setCurrentWidget(self.record)
         self._set_active("record")
+        self._clear_selections()
 
     def show_settings(self) -> None:
         self.settings.apply_theme()
         self.stack.setCurrentWidget(self.settings)
         self._set_active("settings")
+        self._clear_selections()
 
-    def open_meeting(self, meeting_id: int) -> None:
+    def open_meeting(self, meeting_id: int, *, _from_tree: bool = False) -> None:
         self.detail.load(int(meeting_id))
         self.stack.setCurrentWidget(self.detail)
         self._set_active("none")
+        # whichever widget triggered the open keeps its own selection; clear the other
+        if _from_tree:
+            if hasattr(self, "meeting_list"):
+                self.meeting_list.clearSelection()
+        else:
+            if hasattr(self, "folder_tree"):
+                self.folder_tree.clearSelection()
 
     # ---------- call auto-detection ----------
     def _on_call_started(self, apps: list) -> None:
@@ -382,19 +553,87 @@ class Shell(QMainWindow):
             self.home.refresh()
 
     def _rebuild_list(self) -> None:
+        # remember which folders were expanded so a rebuild (e.g. after a plain
+        # rename elsewhere) doesn't visually collapse everything
+        expanded_ids = self._expanded_folder_ids()
+
+        all_meetings = self.repo.list()
+        folders = self.repo.list_folders()
+        by_folder: dict[int, list] = {}
+        unfiled = []
+        for m in all_meetings:
+            if m.folder_id is not None:
+                by_folder.setdefault(m.folder_id, []).append(m)
+            else:
+                unfiled.append(m)
+
+        self.folder_tree.clear()
+        for f in folders:
+            count = len(by_folder.get(f.id, []))
+            folder_item = QTreeWidgetItem([f"{f.name} ({count})"])
+            folder_item.setIcon(0, icons.icon("folder", f.color, 16))
+            folder_item.setData(0, Qt.ItemDataRole.UserRole, ("folder", f.id))
+            self.folder_tree.addTopLevelItem(folder_item)
+            for m in by_folder.get(f.id, []):
+                child = QTreeWidgetItem([m.title or "Untitled meeting"])
+                child.setIcon(0, icons.icon("file", self.theme.color("text_muted"), 16))
+                child.setData(0, Qt.ItemDataRole.UserRole, ("meeting", m.id))
+                folder_item.addChild(child)
+            folder_item.setExpanded(f.id in expanded_ids if expanded_ids is not None else True)
+
         self.meeting_list.clear()
-        for m in self.repo.list():
+        for m in unfiled:
             item = QListWidgetItem(m.title or "Untitled meeting")
             item.setData(Qt.ItemDataRole.UserRole, m.id)
             item.setIcon(icons.icon("file", self.theme.color("text_muted"), 16))
             self.meeting_list.addItem(item)
+
+        self._apply_folders_collapsed()
         self._filter_list(self.search.text())
+
+    def _expanded_folder_ids(self) -> set | None:
+        """The set of currently-expanded folder ids, or None on first build
+        (no items yet) so callers can default new/first-seen folders to expanded."""
+        if self.folder_tree.topLevelItemCount() == 0:
+            return None
+        out = set()
+        for i in range(self.folder_tree.topLevelItemCount()):
+            item = self.folder_tree.topLevelItem(i)
+            if item.isExpanded():
+                _kind, fid = item.data(0, Qt.ItemDataRole.UserRole)
+                out.add(fid)
+        return out
+
+    def _apply_folders_collapsed(self) -> None:
+        # the tree itself is hidden when collapsed OR simply empty of folders
+        # (spec: header stays visible so [+] is discoverable, only the tree hides)
+        collapsed = bool(self.cfg.folders_collapsed)
+        has_folders = self.folder_tree.topLevelItemCount() > 0
+        self.folder_tree.setVisible(has_folders and not collapsed)
+        self._set_folders_chevron_icon()
+
+    def _toggle_folders_collapsed(self) -> None:
+        self.cfg.folders_collapsed = not self.cfg.folders_collapsed
+        self.cfg.save()
+        self._apply_folders_collapsed()
+
+    def _set_folders_chevron_icon(self) -> None:
+        collapsed = bool(self.cfg.folders_collapsed)
+        self.folders_chevron_btn.setIcon(
+            icons.icon("chevron-right" if collapsed else "chevron-down", self.theme.color("text_muted"), 14)
+        )
+        self.folders_chevron_btn.setToolTip("Expand folders" if collapsed else "Collapse folders")
 
     def _filter_list(self, text: str) -> None:
         text = (text or "").strip()
         if not text:
             for i in range(self.meeting_list.count()):
                 self.meeting_list.item(i).setHidden(False)
+            for i in range(self.folder_tree.topLevelItemCount()):
+                folder_item = self.folder_tree.topLevelItem(i)
+                folder_item.setHidden(False)
+                for j in range(folder_item.childCount()):
+                    folder_item.child(j).setHidden(False)
             return
         # full-text match across transcript + notes + attendees + agenda, plus
         # a plain title substring so partial words still narrow the list live.
@@ -405,11 +644,103 @@ class Shell(QMainWindow):
             mid = item.data(Qt.ItemDataRole.UserRole)
             visible = (mid in match_ids) or (low in item.text().lower())
             item.setHidden(not visible)
+        for i in range(self.folder_tree.topLevelItemCount()):
+            folder_item = self.folder_tree.topLevelItem(i)
+            any_visible = False
+            for j in range(folder_item.childCount()):
+                child = folder_item.child(j)
+                mid = child.data(0, Qt.ItemDataRole.UserRole)[1]
+                visible = (mid in match_ids) or (low in child.text(0).lower())
+                child.setHidden(not visible)
+                any_visible = any_visible or visible
+            folder_item.setHidden(not any_visible)
 
     def _on_list_click(self, item: QListWidgetItem) -> None:
         mid = item.data(Qt.ItemDataRole.UserRole)
         if mid is not None:
             self.open_meeting(int(mid))
+
+    def _on_tree_click(self, item: QTreeWidgetItem, _col: int) -> None:
+        kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "meeting":
+            self.open_meeting(int(payload), _from_tree=True)
+        # a folder row just expands/collapses (Qt's default behaviour) — nothing else to do
+
+    # ---------- folders ----------
+    def _new_folder(self) -> None:
+        result = ask_new_folder(self, self.theme)
+        if result is None:
+            return
+        name, color = result
+        self.repo.create_folder(name, color)
+        self.notify_data_changed()
+
+    def _on_folder_context_menu(self, pos: QPoint) -> None:
+        item = self.folder_tree.itemAt(pos)
+        if item is None:
+            return
+        kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
+        if kind != "folder":
+            return
+        folder_id = payload
+        folders = {f.id: f for f in self.repo.list_folders()}
+        folder = folders.get(folder_id)
+        if folder is None:
+            return
+
+        menu = QMenu(self)
+        rename_act = menu.addAction("Rename…")
+        color_menu = menu.addMenu("Colour")
+        color_actions = {}
+        for name, hexcolor in FOLDER_COLORS:
+            act = color_menu.addAction(self._color_icon(hexcolor), name)
+            color_actions[act] = hexcolor
+        menu.addSeparator()
+        delete_act = menu.addAction("Delete folder")
+
+        chosen = menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen is rename_act:
+            self._rename_folder(folder_id, folder.name)
+        elif chosen is delete_act:
+            self._delete_folder(folder_id, folder.name)
+        elif chosen in color_actions:
+            self.repo.update_folder(folder_id, color=color_actions[chosen])
+            self.notify_data_changed()
+
+    @staticmethod
+    def _color_icon(hexcolor: str) -> QIcon:
+        """A small rounded coloured-square QIcon — used for the folder colour
+        submenu (each swatch shows its own colour, not the app's neutral icon set)."""
+        pm = QPixmap(14, 14)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setBrush(QColor(hexcolor))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(0, 0, 14, 14, 3, 3)
+        painter.end()
+        return QIcon(pm)
+
+    def _rename_folder(self, folder_id: int, current_name: str) -> None:
+        new_name = ask_rename_folder(self, self.theme, current_name)
+        if new_name is None:
+            return
+        self.repo.update_folder(folder_id, name=new_name)
+        self.notify_data_changed()
+
+    def _delete_folder(self, folder_id: int, name: str) -> None:
+        if QMessageBox.question(
+            self, "Delete folder",
+            f"Delete “{name}”? Its meetings are kept and become unfiled."
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self.repo.delete_folder(folder_id)
+        self.notify_data_changed()
+
+    def _on_meeting_dropped_on_folder(self, meeting_id: int, folder_id) -> None:
+        self.repo.update(int(meeting_id), folder_id=folder_id)
+        self.notify_data_changed()
 
     def _toggle_theme(self) -> None:
         self.theme.toggle()
@@ -433,6 +764,8 @@ class Shell(QMainWindow):
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
         self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))
         self.settings_btn.setIcon(icons.icon("settings", self.theme.color("text_muted"), 18))
+        self.new_folder_btn.setIcon(icons.icon("plus", self.theme.color("text_muted"), 14))
+        self._set_folders_chevron_icon()
         dark = self.theme.mode == "dark"
         self.theme_btn.setText("  Light mode" if dark else "  Dark mode")
         self.theme_btn.setIcon(icons.icon("sun" if dark else "moon", self.theme.color("text_muted"), 18))

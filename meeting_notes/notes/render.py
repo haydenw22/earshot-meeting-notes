@@ -36,7 +36,7 @@ def to_html(notes: dict, *, title: str = "", date_text: str = "", attendees: Opt
     if meta:
         parts.append(f'<p style="color:#666;">{_html.escape(meta)}</p>')
     if notes.get("summary"):
-        parts.append(f"<p>{_html.escape(notes['summary'])}</p>")
+        parts.append(f"<p>{_bold_html(notes['summary'])}</p>")
 
     actions = notes.get("action_items") or []
     if actions:
@@ -44,7 +44,7 @@ def to_html(notes: dict, *, title: str = "", date_text: str = "", attendees: Opt
         rows = []
         for a in actions:
             box = "&#9745;" if a.get("done") else "&#9744;"  # ☑ / ☐
-            task = _html.escape(a.get("task") or "")
+            task = _bold_html(a.get("task") or "")
             owner = f" — <b>{_html.escape(a['owner'])}</b>" if a.get("owner") else ""
             sug = ('' if a.get("confirmed", True) or a.get("done")
                    else ' <i style="color:#999;">(suggested)</i>')

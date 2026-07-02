@@ -262,8 +262,10 @@ class SettingsPage(QWidget):
             self.online_model.setText(model)
 
     def _on_notes_provider_changed(self, *_) -> None:
-        local = self.notes_provider_combo.currentData() == "openai"
-        self.llm_card.setVisible(local)
+        provider = self.notes_provider_combo.currentData()
+        self.claude_card.setVisible(provider == "anthropic")
+        self.llm_card.setVisible(provider == "openai")
+        self.local_card.setVisible(provider == "local")
 
     def _test_llm(self) -> None:
         self.llm_test_label.setText("Testing…")
@@ -272,6 +274,16 @@ class SettingsPage(QWidget):
         ok = openai_llm.ping(self.llm_base_url.text().strip(), self.llm_key.text().strip())
         self.llm_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
         self.llm_test_label.setStyleSheet(
+            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
+        )
+
+    def _test_local_llm(self) -> None:
+        self.local_test_label.setText("Testing…")
+        self.local_test_label.repaint()
+        from ..notes import openai_llm
+        ok = openai_llm.ping(self.local_base_url.text().strip(), self.local_key.text().strip())
+        self.local_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
+        self.local_test_label.setStyleSheet(
             f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
         )
 
@@ -509,10 +521,15 @@ class SettingsPage(QWidget):
     def _ai_tab(self) -> QWidget:
         w, lay = self._tab()
 
-        prov_card, pcl = self._card("Notes AI", "Which model writes your meeting notes and runs AI actions.")
+        prov_card, pcl = self._card(
+            "AI model",
+            "Powers meeting notes, AI actions, briefs and Ask Earshot. Transcription is "
+            "configured separately.",
+        )
         self.notes_provider_combo = QComboBox()
-        self.notes_provider_combo.addItem("Claude (Anthropic) — richest notes", "anthropic")
-        self.notes_provider_combo.addItem("Local / OpenAI-compatible (Ollama, LM Studio…)", "openai")
+        self.notes_provider_combo.addItem("Anthropic (Claude)", "anthropic")
+        self.notes_provider_combo.addItem("OpenAI or compatible cloud", "openai")
+        self.notes_provider_combo.addItem("Local (Ollama, LM Studio…)", "local")
         _npi = self.notes_provider_combo.findData(self.cfg.notes_provider)
         self.notes_provider_combo.setCurrentIndex(_npi if _npi >= 0 else 0)
         self.notes_provider_combo.currentIndexChanged.connect(self._on_notes_provider_changed)
@@ -520,38 +537,37 @@ class SettingsPage(QWidget):
         pform.setSpacing(10)
         pform.addRow("Provider", self.notes_provider_combo)
         pcl.addLayout(pform)
+        self.auto_summary = QCheckBox("Automatically generate notes after transcription")
+        self.auto_summary.setChecked(self.cfg.auto_summary)
+        pcl.addWidget(self.auto_summary)
         lay.addWidget(prov_card)
 
-        card, cl = self._card("Claude (Anthropic)", "Used to turn the transcript into notes and to answer questions. Stored locally.")
+        card, cl = self._card("Anthropic (Claude)", "Uses your Anthropic API key. Stored locally.")
         form = QFormLayout()
         form.setSpacing(10)
         self.api_key = QLineEdit(self.cfg.anthropic_api_key)
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key.setPlaceholderText("sk-ant-…  (or set ANTHROPIC_API_KEY)")
         self.model = QLineEdit(self.cfg.anthropic_model)
-        form.addRow("Claude API key", self.api_key)
+        form.addRow("API key", self.api_key)
         form.addRow("Model", self.model)
         cl.addLayout(form)
-        self.auto_summary = QCheckBox("Automatically generate notes after transcription")
-        self.auto_summary.setChecked(self.cfg.auto_summary)
-        cl.addWidget(self.auto_summary)
         self.claude_card = card
         lay.addWidget(card)
 
         self.llm_card, lcl = self._card(
-            "Local / OpenAI-compatible LLM",
-            "Run notes fully locally (Ollama, LM Studio, vLLM) or via any OpenAI-compatible "
-            "gateway. Ask Earshot still uses Claude.",
+            "OpenAI or compatible cloud",
+            "Any hosted OpenAI-compatible chat API — OpenAI itself, or a compatible gateway.",
         )
         lform = QFormLayout()
         lform.setSpacing(10)
         self.llm_base_url = QLineEdit(self.cfg.llm_base_url)
-        self.llm_base_url.setPlaceholderText("http://localhost:11434/v1")
+        self.llm_base_url.setPlaceholderText("https://api.openai.com/v1")
         self.llm_model = QLineEdit(self.cfg.llm_model)
-        self.llm_model.setPlaceholderText("llama3.1  ·  qwen2.5:14b  ·  …")
+        self.llm_model.setPlaceholderText("gpt-4o-mini  ·  or any model your endpoint serves")
         self.llm_key = QLineEdit(self.cfg.llm_api_key)
         self.llm_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.llm_key.setPlaceholderText("optional — local servers usually need none")
+        self.llm_key.setPlaceholderText("API key")
         lform.addRow("Base URL", self.llm_base_url)
         lform.addRow("Model", self.llm_model)
         lform.addRow("API key", self.llm_key)
@@ -565,11 +581,40 @@ class SettingsPage(QWidget):
         llm_row.addWidget(self.llm_test_label)
         llm_row.addStretch(1)
         lcl.addLayout(llm_row)
+        lay.addWidget(self.llm_card)
+
+        self.local_card, loc_cl = self._card(
+            "Local",
+            "Run notes fully locally — Ollama, LM Studio, vLLM — or any other OpenAI-compatible "
+            "server on your machine or LAN.",
+        )
+        loc_form = QFormLayout()
+        loc_form.setSpacing(10)
+        self.local_base_url = QLineEdit(self.cfg.local_llm_base_url)
+        self.local_base_url.setPlaceholderText("http://localhost:11434/v1")
+        self.local_model = QLineEdit(self.cfg.local_llm_model)
+        self.local_model.setPlaceholderText("llama3.1  ·  qwen2.5:14b")
+        self.local_key = QLineEdit(self.cfg.local_llm_api_key)
+        self.local_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.local_key.setPlaceholderText("optional — local servers usually need none")
+        loc_form.addRow("Base URL", self.local_base_url)
+        loc_form.addRow("Model", self.local_model)
+        loc_form.addRow("API key", self.local_key)
+        loc_cl.addLayout(loc_form)
+        loc_row = QHBoxLayout()
+        self.local_test_btn = QPushButton("Test connection")
+        self.local_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.local_test_btn.clicked.connect(self._test_local_llm)
+        self.local_test_label = QLabel("")
+        loc_row.addWidget(self.local_test_btn)
+        loc_row.addWidget(self.local_test_label)
+        loc_row.addStretch(1)
+        loc_cl.addLayout(loc_row)
         lhint = QLabel("Ollama: install from ollama.com, then `ollama pull llama3.1` — the base URL above is its default.")
         lhint.setObjectName("Faint")
         lhint.setWordWrap(True)
-        lcl.addWidget(lhint)
-        lay.addWidget(self.llm_card)
+        loc_cl.addWidget(lhint)
+        lay.addWidget(self.local_card)
         self._on_notes_provider_changed()
 
         oa_card, ocl = self._card(
@@ -601,6 +646,22 @@ class SettingsPage(QWidget):
         self.ci_text.setMinimumHeight(90)
         cicl.addWidget(self.ci_text)
         lay.addWidget(ci_card)
+
+        brief_card, bcl = self._card(
+            "Prep brief",
+            "How \"Prep brief from past meetings\" on the recording screen picks which past "
+            "meetings to draw from.",
+        )
+        self.brief_mode_combo = QComboBox()
+        self.brief_mode_combo.addItem("Basic — last/related 3 meetings", "basic")
+        self.brief_mode_combo.addItem("Advanced — choose a folder or specific meetings", "advanced")
+        _bmi = self.brief_mode_combo.findData(self.cfg.brief_mode)
+        self.brief_mode_combo.setCurrentIndex(_bmi if _bmi >= 0 else 0)
+        bform = QFormLayout()
+        bform.setSpacing(10)
+        bform.addRow("Mode", self.brief_mode_combo)
+        bcl.addLayout(bform)
+        lay.addWidget(brief_card)
 
         tpl_card, tplcl = self._card(
             "Note templates",
@@ -637,8 +698,8 @@ class SettingsPage(QWidget):
         card, cl = self._card("Earshot", f"Version {__version__}")
         body = QLabel(
             "Earshot records you and the other side on separate channels, transcribes on "
-            "your home server or an online service, and writes notes with Claude. "
-            "Your meetings stay on this PC."
+            "your home server or an online service, and writes notes with the AI model you "
+            "choose in Settings. Your meetings stay on this PC."
         )
         body.setObjectName("Muted")
         body.setWordWrap(True)
@@ -703,9 +764,16 @@ class SettingsPage(QWidget):
         self.cfg.anthropic_api_key = self.api_key.text().strip()
         self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
         self.cfg.notes_provider = self.notes_provider_combo.currentData() or "anthropic"
+        # Persist ALL three provider cards regardless of which is currently visible —
+        # this is what makes switching providers lossless (keys/URLs for the other two
+        # are kept, not wiped, when you switch away and back).
         self.cfg.llm_base_url = self.llm_base_url.text().strip()
         self.cfg.llm_model = self.llm_model.text().strip()
         self.cfg.llm_api_key = self.llm_key.text().strip()
+        self.cfg.local_llm_base_url = self.local_base_url.text().strip()
+        self.cfg.local_llm_model = self.local_model.text().strip()
+        self.cfg.local_llm_api_key = self.local_key.text().strip()
+        self.cfg.brief_mode = self.brief_mode_combo.currentData() or "basic"
         self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
         self.cfg.auto_summary = self.auto_summary.isChecked()
         self.cfg.mic_device_name = self.mic_combo.currentData()

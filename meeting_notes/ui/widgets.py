@@ -68,3 +68,17 @@ def hline(theme) -> QFrame:
     line.setFixedHeight(1)
     line.setStyleSheet(f"background:{theme.color('border')}; border:none;")
     return line
+
+
+# Palette offered when creating/recolouring a folder — name + hex, Indigo is the
+# app's own accent colour so it's the sensible default.
+FOLDER_COLORS = [
+    ("Red", "#EF4444"),
+    ("Orange", "#F59E0B"),
+    ("Green", "#22C55E"),
+    ("Teal", "#14B8A6"),
+    ("Blue", "#3B82F6"),
+    ("Indigo", "#6366F1"),
+    ("Purple", "#A855F7"),
+    ("Pink", "#EC4899"),
+]

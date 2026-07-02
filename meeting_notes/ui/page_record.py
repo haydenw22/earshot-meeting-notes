@@ -9,14 +9,19 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -41,9 +46,113 @@ _INPUT_ACTIVE_LEVEL = 0.04
 # Don't warn until the recording has had this long to actually produce sound.
 _INPUT_GRACE_SECS = 10.0
 
+# Advanced prep-brief picker limits.
+_BRIEF_PICKER_RECENT_LIMIT = 25   # how many recent Done meetings the picker offers
+_BRIEF_MAX_MEETINGS = 10          # cap on how many meetings feed one brief
+
 
 def _parse_attendees(text: str) -> list[str]:
     return [a.strip() for a in text.replace(";", ",").split(",") if a.strip()]
+
+
+class BriefPickerDialog(QDialog):
+    """Advanced-mode prep-brief picker: either all Done meetings in a folder, or
+    an explicit hand-picked set (capped at _BRIEF_MAX_MEETINGS)."""
+
+    def __init__(self, parent, repo, theme):
+        super().__init__(parent)
+        self.repo = repo
+        self.theme = theme
+        self._checked_order: list[int] = []  # oldest-checked-first, for the eviction rule
+        self.setWindowTitle("Prep brief — choose past meetings")
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(420)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(12)
+
+        self.folder_radio = QRadioButton("From a folder")
+        self.folder_radio.setChecked(True)
+        v.addWidget(self.folder_radio)
+        self.folder_combo = QComboBox()
+        folders = self.repo.list_folders()
+        for f in folders:
+            self.folder_combo.addItem(f.name, f.id)
+        self.folder_combo.setEnabled(bool(folders))
+        if not folders:
+            self.folder_radio.setEnabled(False)
+        v.addWidget(self.folder_combo)
+
+        self.meetings_radio = QRadioButton("Pick meetings")
+        v.addWidget(self.meetings_radio)
+        self.meeting_list = QListWidget()
+        self.meeting_list.setMinimumHeight(220)
+        done = [m for m in self.repo.list(limit=500) if m.status == "Done"]
+        done = done[:_BRIEF_PICKER_RECENT_LIMIT]  # repo.list() is already newest-first
+        for m in done:
+            item = QListWidgetItem(f"{m.title or 'Untitled meeting'}  ·  {m.date_text}")
+            item.setData(Qt.ItemDataRole.UserRole, m.id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.meeting_list.addItem(item)
+        self.meeting_list.itemChanged.connect(self._on_item_changed)
+        v.addWidget(self.meeting_list)
+
+        self.limit_hint = QLabel(f"You can pick up to {_BRIEF_MAX_MEETINGS} meetings.")
+        self.limit_hint.setObjectName("Faint")
+        self.limit_hint.setWordWrap(True)
+        v.addWidget(self.limit_hint)
+
+        if folders:
+            self.folder_radio.toggled.connect(self._sync_enabled)
+        self._sync_enabled()
+
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        v.addWidget(self.buttons)
+
+    def _sync_enabled(self, *_a) -> None:
+        use_folder = self.folder_radio.isChecked()
+        self.folder_combo.setEnabled(use_folder and self.folder_combo.count() > 0)
+        self.meeting_list.setEnabled(not use_folder)
+
+    def _on_item_changed(self, changed: QListWidgetItem) -> None:
+        mid = changed.data(Qt.ItemDataRole.UserRole)
+        if changed.checkState() == Qt.CheckState.Checked:
+            if mid not in self._checked_order:
+                self._checked_order.append(mid)
+            if len(self._checked_order) > _BRIEF_MAX_MEETINGS:
+                # evict the oldest-checked item rather than blocking the click —
+                # the hint label below explains the cap either way
+                oldest = self._checked_order.pop(0)
+                self._set_check_silently(oldest, Qt.CheckState.Unchecked)
+        else:
+            if mid in self._checked_order:
+                self._checked_order.remove(mid)
+        checked_n = len(self._checked_order)
+        if checked_n >= _BRIEF_MAX_MEETINGS:
+            self.limit_hint.setText(f"Maximum {_BRIEF_MAX_MEETINGS} meetings reached.")
+        else:
+            self.limit_hint.setText(f"You can pick up to {_BRIEF_MAX_MEETINGS} meetings ({checked_n} selected).")
+
+    def _set_check_silently(self, meeting_id: int, state) -> None:
+        self.meeting_list.blockSignals(True)
+        for i in range(self.meeting_list.count()):
+            item = self.meeting_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == meeting_id:
+                item.setCheckState(state)
+                break
+        self.meeting_list.blockSignals(False)
+
+    def payload(self):
+        """('folder', folder_id) or ('meetings', [id, ...]) — feed to
+        RecordPage.resolve_brief_meetings() together with repo.list()."""
+        if self.folder_radio.isChecked():
+            return ("folder", self.folder_combo.currentData())
+        return ("meetings", list(self._checked_order))
 
 
 class RecordPage(QWidget):
@@ -117,6 +226,13 @@ class RecordPage(QWidget):
         tbox.addWidget(tpl_lbl)
         tbox.addWidget(self.template_combo)
         sl.addWidget(self.template_box)
+        # folder — always visible (default remains no folder)
+        folder_lbl = QLabel("Folder")
+        folder_lbl.setObjectName("H3")
+        sl.addWidget(folder_lbl)
+        self.folder_combo = QComboBox()
+        self.folder_combo.currentIndexChanged.connect(self._on_folder_combo_changed)
+        sl.addWidget(self.folder_combo)
         root.addWidget(sess)
 
         # agenda card — pre-meeting notes that stay on screen while recording and
@@ -259,15 +375,52 @@ class RecordPage(QWidget):
         ]
         return (related or done)[:limit]
 
+    @staticmethod
+    def resolve_brief_meetings(meetings: list, mode_payload) -> list:
+        """Pure helper: turn a BriefPickerDialog payload into the list of past
+        meetings to brief from. `meetings` is any iterable of Meeting (e.g.
+        repo.list()) — this does not touch the repo or the DB.
+
+        mode_payload:
+          ("folder", folder_id) -> all Done meetings in that folder, newest
+              first (as `meetings` is already ordered), capped at
+              _BRIEF_MAX_MEETINGS.
+          ("meetings", [id, ...]) -> exactly those meetings (Done or not —
+              the picker only ever offers Done ones), in the given order,
+              capped at _BRIEF_MAX_MEETINGS.
+        """
+        if not mode_payload:
+            return []
+        kind, value = mode_payload
+        if kind == "folder":
+            if value is None:
+                return []
+            done_in_folder = [m for m in meetings if m.status == "Done" and m.folder_id == value]
+            return done_in_folder[:_BRIEF_MAX_MEETINGS]
+        if kind == "meetings":
+            by_id = {m.id: m for m in meetings}
+            picked = [by_id[i] for i in (value or []) if i in by_id]
+            return picked[:_BRIEF_MAX_MEETINGS]
+        return []
+
     def _generate_brief(self) -> None:
         from ..notes import service as notes_service
         if not notes_service.ready(self.cfg):
             QMessageBox.warning(self, "Notes AI not configured", notes_service.missing_hint(self.cfg))
             return
-        past = self._related_past_meetings()
+        if self.cfg.brief_mode == "advanced":
+            dlg = BriefPickerDialog(self, self.repo, self.theme)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            past = self.resolve_brief_meetings(self.repo.list(limit=500), dlg.payload())
+        else:
+            past = self._related_past_meetings()
         if not past:
             self.status_label.setText("No completed meetings yet to brief from.")
             return
+        self._run_brief(past)
+
+    def _run_brief(self, past: list) -> None:
         blocks = []
         for m in past:
             notes = m.notes or {}
@@ -373,6 +526,32 @@ class RecordPage(QWidget):
                 self.template_combo.addItem("General (default)", "")
                 for t in templates:
                     self.template_combo.addItem(t.get("name") or "(unnamed)", t.get("name") or "")
+            self._populate_folder_combo()
+
+    def _populate_folder_combo(self, *, select_folder_id=None) -> None:
+        self.folder_combo.blockSignals(True)
+        self.folder_combo.clear()
+        self.folder_combo.addItem("No folder", None)
+        for f in self.repo.list_folders():
+            self.folder_combo.addItem(icons.icon("folder", f.color, 16), f.name, f.id)
+        self.folder_combo.addItem("＋ New folder…", "__new__")
+        if select_folder_id is not None:
+            idx = self.folder_combo.findData(select_folder_id)
+            if idx >= 0:
+                self.folder_combo.setCurrentIndex(idx)
+        self.folder_combo.blockSignals(False)
+
+    def _on_folder_combo_changed(self, index: int) -> None:
+        if self.folder_combo.itemData(index) != "__new__":
+            return
+        from .folder_dialog import ask_new_folder
+        result = ask_new_folder(self, self.theme)
+        if result is None:
+            self._populate_folder_combo()  # revert to "No folder"
+            return
+        name, color = result
+        folder = self.repo.create_folder(name, color)
+        self._populate_folder_combo(select_folder_id=folder.id)
 
     def _load_devices(self) -> None:
         try:
@@ -421,6 +600,8 @@ class RecordPage(QWidget):
         attendees = _parse_attendees(self.attendees.text())
         agenda = self.agenda.toPlainText().strip()
         template = (self.template_combo.currentData() or "") if self.template_box.isVisible() else ""
+        folder_data = self.folder_combo.currentData()
+        folder_id = folder_data if folder_data != "__new__" else None
         self._bookmarks = []
         self.bookmark_count.setText("")
         self._mic_seen = False
@@ -428,7 +609,7 @@ class RecordPage(QWidget):
         self.input_warning.setVisible(False)
         meeting = self.repo.create(
             date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda,
-            template=template,
+            template=template, folder_id=folder_id,
         )
         self.meeting_id = meeting.id
         self.repo.update(self.meeting_id, status="Recording", headphones_mode=self.headphones.isChecked())

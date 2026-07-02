@@ -16,6 +16,13 @@ from . import db as _db
 
 
 @dataclass
+class Folder:
+    id: Optional[int] = None
+    name: str = ""
+    color: str = "#6366F1"
+
+
+@dataclass
 class Meeting:
     id: Optional[int] = None
     title: Optional[str] = None
@@ -34,6 +41,7 @@ class Meeting:
     error: Optional[str] = None
     notion_page_id: Optional[str] = None
     notion_synced_at: Optional[str] = None
+    folder_id: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -78,6 +86,7 @@ class Meeting:
             error=d.get("error"),
             notion_page_id=d.get("notion_page_id"),
             notion_synced_at=d.get("notion_synced_at"),
+            folder_id=d.get("folder_id"),
             created_at=d.get("created_at"),
             updated_at=d.get("updated_at"),
         )
@@ -89,7 +98,7 @@ class MeetingRepository:
     _WRITABLE = frozenset({
         "title", "date_text", "date_iso", "attendees", "agenda", "template", "bookmarks",
         "transcript", "notes_json", "audio_dir", "headphones_mode", "duration_secs",
-        "status", "error", "notion_page_id", "notion_synced_at",
+        "status", "error", "notion_page_id", "notion_synced_at", "folder_id",
     })
 
     def __init__(self, conn: Optional[sqlite3.Connection] = None):
@@ -109,12 +118,12 @@ class MeetingRepository:
 
     # --- writes ---
     def create(self, *, date_text: str, date_iso: str, attendees: list[str], agenda: str = "",
-               template: str = "") -> Meeting:
+               template: str = "", folder_id: Optional[int] = None) -> Meeting:
         with self._lock:
             cur = self.conn.execute(
-                "INSERT INTO meetings (date_text, date_iso, attendees, agenda, template, status) "
-                "VALUES (?, ?, ?, ?, ?, 'New')",
-                (date_text, date_iso, json.dumps(attendees), agenda, template),
+                "INSERT INTO meetings (date_text, date_iso, attendees, agenda, template, folder_id, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'New')",
+                (date_text, date_iso, json.dumps(attendees), agenda, template, folder_id),
             )
             self.conn.commit()
             mid = cur.lastrowid
@@ -156,6 +165,50 @@ class MeetingRepository:
         with self._lock:
             self.conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             self.conn.execute("DELETE FROM meetings_fts WHERE meeting_id = ?", (meeting_id,))
+            self.conn.commit()
+
+    # --- folders ---
+    def create_folder(self, name: str, color: str) -> Folder:
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO folders (name, color) VALUES (?, ?)", (name, color),
+            )
+            self.conn.commit()
+            fid = cur.lastrowid
+            row = self.conn.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
+        return Folder(id=row["id"], name=row["name"], color=row["color"])
+
+    def list_folders(self) -> list[Folder]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM folders ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        return [Folder(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+
+    def update_folder(self, folder_id: int, *, name: Optional[str] = None,
+                       color: Optional[str] = None) -> None:
+        fields: dict[str, Any] = {}
+        if name is not None:
+            fields["name"] = name
+        if color is not None:
+            fields["color"] = color
+        if not fields:
+            return
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values())
+        vals.append(folder_id)
+        with self._lock:
+            self.conn.execute(f"UPDATE folders SET {cols} WHERE id = ?", vals)
+            self.conn.commit()
+
+    def delete_folder(self, folder_id: int) -> None:
+        with self._lock:
+            # unfile first: meetings are kept, they just lose their folder
+            self.conn.execute(
+                "UPDATE meetings SET folder_id = NULL, updated_at = datetime('now') WHERE folder_id = ?",
+                (folder_id,),
+            )
+            self.conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
             self.conn.commit()
 
     def recover_interrupted(self) -> int:

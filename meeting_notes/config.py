@@ -57,15 +57,21 @@ class Config:
     upload_codec: str = "flac"
 
     # --- Notes / AI ---
-    # "anthropic" (Claude — richest notes) | "openai" (any OpenAI-compatible LLM,
-    # incl. fully local: Ollama, LM Studio, vLLM…)
+    # Which model powers notes, AI actions, prep briefs AND Ask Earshot:
+    # "anthropic" (Claude) | "openai" (any OpenAI-compatible cloud endpoint) |
+    # "local" (fully local: Ollama, LM Studio, vLLM…). Keys/URLs/models for all
+    # three are kept even when not selected, so switching providers is lossless.
     notes_provider: str = "anthropic"
     anthropic_api_key: str = ""           # read from env ANTHROPIC_API_KEY if blank
     anthropic_model: str = "claude-sonnet-4-6"  # richer notes than Haiku; user can change in Settings
-    llm_base_url: str = "http://localhost:11434/v1"  # Ollama default
-    llm_api_key: str = ""                 # optional (local servers usually need none)
-    llm_model: str = ""                   # e.g. "llama3.1", "qwen2.5:14b"
+    llm_base_url: str = "https://api.openai.com/v1"  # OpenAI / OpenAI-compatible cloud default
+    llm_api_key: str = ""
+    llm_model: str = ""                   # e.g. "gpt-4o-mini"
+    local_llm_base_url: str = "http://localhost:11434/v1"  # Ollama default
+    local_llm_api_key: str = ""           # optional (local servers usually need none)
+    local_llm_model: str = ""             # e.g. "llama3.1", "qwen2.5:14b"
     auto_summary: bool = True             # generate AI notes automatically after transcription
+    brief_mode: str = "basic"             # "basic" (last/related 3) | "advanced" (folder/pick)
     # AI customisation
     custom_instructions_enabled: bool = False
     custom_instructions: str = ""         # appended to every notes prompt when enabled
@@ -95,6 +101,8 @@ class Config:
     sidebar_width: int = 258              # resizable; persisted
     sidebar_side: str = "left"            # "left" | "right"
     show_dashboard: bool = True           # show the pending-action-items dashboard on Home
+    dashboard_collapsed: bool = False     # collapsed/expanded state of the to-do card on Home
+    folders_collapsed: bool = False       # collapsed/expanded state of the sidebar FOLDERS tree
 
     # --- Call detection (prompt to record when another app starts using the mic) ---
     call_detect_enabled: bool = True
@@ -142,6 +150,23 @@ class Config:
         # re-promote fields a newer version wrote and an older version demoted
         for k in [k for k in cfg.extra if k in known]:
             setattr(cfg, k, cfg.extra.pop(k))
+        # One-time migration (S3): "openai" used to mean "any OpenAI-compatible
+        # endpoint", which is how existing Ollama users ended up with
+        # notes_provider="openai" pointing at localhost. Now "openai" means the
+        # hosted OpenAI-compatible-cloud provider and "local" is separate — move
+        # such configs onto the new local_* fields so nothing breaks unattended.
+        if cfg.notes_provider == "openai" and (
+            "localhost" in (cfg.llm_base_url or "") or "127.0.0.1" in (cfg.llm_base_url or "")
+        ):
+            if cfg.local_llm_base_url == cls.__dataclass_fields__["local_llm_base_url"].default:
+                cfg.local_llm_base_url = cfg.llm_base_url
+            if not cfg.local_llm_api_key:
+                cfg.local_llm_api_key = cfg.llm_api_key
+            if not cfg.local_llm_model:
+                cfg.local_llm_model = cfg.llm_model
+            cfg.notes_provider = "local"
+            cfg.llm_base_url = cls.__dataclass_fields__["llm_base_url"].default
+            cfg.llm_model = ""
         return cfg
 
     def save(self) -> None:

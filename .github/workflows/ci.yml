@@ -39,6 +39,9 @@ jobs:
           python tests/test_transcription_options.py
           python tests/test_longmeeting.py
           python tests/test_action_items.py
+          python tests/test_ui_fixes.py
+          python tests/test_folders.py
+          python tests/test_ai_provider.py
           python tests/test_vad.py
           python tests/test_deepgram.py
           python tests/test_overlay.py

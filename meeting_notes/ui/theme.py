@@ -328,4 +328,20 @@ QToolTip {{
     padding: 6px 10px;
     font-size: 12px;
 }}
+
+/* ---------- menus (e.g. detail page "More") ---------- */
+QMenu {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    padding: 4px;
+}}
+QMenu::item {{
+    padding: 6px 14px;
+    border-radius: 8px;
+    color: {t['text']};
+}}
+QMenu::item:selected {{ background-color: {t['primary_soft']}; color: {t['text']}; }}
+QMenu::item:disabled {{ color: {t['text_faint']}; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 4px 8px; }}
 """
