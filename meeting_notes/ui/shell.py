@@ -7,10 +7,12 @@ from __future__ import annotations
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
+    QEvent,
     QMimeData,
     QPoint,
     QPropertyAnimation,
     QRectF,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -27,8 +29,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -93,11 +97,66 @@ class _MeetingList(QListWidget):
         event.acceptProposedAction()
 
 
+class _TreeWrapDelegate(QStyledItemDelegate):
+    """Grow row heights so long titles wrap. Qt's built-in word-wrap never
+    expands the cell ("the cell will not be expanded to fit all the text"),
+    so without this the tree elides instead of wrapping like the mockup."""
+
+    def sizeHint(self, option, index):  # noqa: N802 (Qt override)
+        base = super().sizeHint(option, index)
+        view = option.widget
+        if view is None:
+            return base
+        depth = 1  # root decoration reserves one indent level for top rows
+        parent = index.parent()
+        while parent.isValid():
+            depth += 1
+            parent = parent.parent()
+        avail = (view.viewport().width() - view.indentation() * depth
+                 - 16 - 6    # icon + icon/text gap
+                 - 22)       # QSS item padding + left accent border
+        if avail <= 40:
+            return base
+        rect = option.fontMetrics.boundingRect(
+            0, 0, avail, 100000, Qt.TextFlag.TextWordWrap, index.data() or "")
+        return QSize(base.width(), max(base.height(), rect.height() + 14))
+
+
 class _FolderTree(QTreeWidget):
     """The folders tree — accepts a dropped meeting id (files it), and lets a
-    meeting child be dragged back out (unfiles it)."""
+    meeting child be dragged back out (unfiles it).
+
+    Sizes itself to its content (mockup: it flows in the sidebar, no boxed
+    empty space) but only as a PREFERENCE — when the window is short the
+    sidebar column is over-constrained, and demanding the height (fixed/min)
+    makes Qt's min-clamp paint the tree over the widgets below it. Preferred
+    height + content-capped maximum shrinks gracefully instead (the tree
+    scrolls internally)."""
 
     meeting_dropped = Signal(int, object)  # meeting_id, folder_id (None = unfile)
+
+    _MIN_H = 34          # ~one row: what we shrink to under pressure
+    _MAX_CONTENT_H = 320  # huge project lists scroll rather than eat the sidebar
+
+    def __init__(self):
+        super().__init__()
+        self._content_h = self._MIN_H
+        pol = self.sizePolicy()
+        pol.setVerticalPolicy(QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(pol)
+
+    def set_content_height(self, h: int) -> None:
+        h = max(self._MIN_H, min(h, self._MAX_CONTENT_H))
+        if h != self._content_h:
+            self._content_h = h
+            self.setMaximumHeight(h)  # never taller than the content
+            self.updateGeometry()
+
+    def sizeHint(self):  # noqa: N802 (Qt override)
+        return QSize(super().sizeHint().width(), self._content_h)
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt override)
+        return QSize(super().minimumSizeHint().width(), self._MIN_H)
 
     def mimeTypes(self) -> list[str]:
         return [_MEETING_MIME]
@@ -464,12 +523,21 @@ class Shell(QMainWindow):
         lay.addLayout(folders_head)
 
         self.folder_tree = _FolderTree()
+        self.folder_tree.setObjectName("SidebarTree")
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.setIndentation(14)
         self.folder_tree.setRootIsDecorated(True)
         self.folder_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideRight)
+        # mockup: long meeting titles wrap onto extra lines instead of eliding,
+        # and the tree flows borderless in the sidebar sized to its content
+        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.folder_tree.setWordWrap(True)
+        self.folder_tree.setUniformRowHeights(False)
+        self.folder_tree.setItemDelegate(_TreeWrapDelegate(self.folder_tree))
         self.folder_tree.itemClicked.connect(self._on_tree_click)
+        self.folder_tree.itemExpanded.connect(lambda _i: self._queue_fit_folder_tree())
+        self.folder_tree.itemCollapsed.connect(lambda _i: self._queue_fit_folder_tree())
+        self.folder_tree.installEventFilter(self)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
         # drag & drop: a meeting dragged out of a folder lands back on the list
@@ -800,6 +868,31 @@ class Shell(QMainWindow):
         has_folders = self.folder_tree.topLevelItemCount() > 0
         self.folder_tree.setVisible(has_folders and not collapsed)
         self._set_folders_chevron_icon()
+        self._queue_fit_folder_tree()
+
+    def _queue_fit_folder_tree(self) -> None:
+        # after the pending relayout, so wrapped-row heights are final
+        QTimer.singleShot(0, self._fit_folder_tree_height)
+
+    def _fit_folder_tree_height(self) -> None:
+        """Measure the tree's content and feed it to the tree's preferred
+        height (see _FolderTree: preference, not a demand)."""
+        t = self.folder_tree
+        t.doItemsLayout()  # re-query wrap heights at the current width
+        h = 0
+        for i in range(t.topLevelItemCount()):
+            top = t.topLevelItem(i)
+            h += t.visualItemRect(top).height()
+            if top.isExpanded():
+                for j in range(top.childCount()):
+                    h += t.visualItemRect(top.child(j)).height()
+        t.set_content_height(h + 8)
+
+    def eventFilter(self, obj, event):
+        # sidebar splitter drags change the wrap width -> row heights change
+        if obj is self.folder_tree and event.type() == QEvent.Type.Resize:
+            self._queue_fit_folder_tree()
+        return super().eventFilter(obj, event)
 
     def _toggle_folders_collapsed(self) -> None:
         self.cfg.folders_collapsed = not self.cfg.folders_collapsed

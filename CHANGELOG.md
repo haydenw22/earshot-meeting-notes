@@ -4,6 +4,16 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] — 2026-07-03 · Sidebar projects polish
+
+### Changed
+
+- The PROJECTS section now flows in the sidebar like the mockup: no boxed panel, rounded hover rows, and long meeting titles wrap onto extra lines instead of being cut off with "…". The section takes exactly the height its content needs (and scrolls gracefully when the window is short).
+
+### Removed
+
+- The "Meeting notes" card in the home page's right rail — it duplicated the meeting list sitting right next to it.
+
 ## [0.21.0] — 2026-07-03 · Home redesign, projects, due dates & accounts preview
 
 ### Added

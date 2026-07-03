@@ -294,6 +294,25 @@ QTextBrowser, QTextEdit {{
     color: {t['text']};
 }}
 
+/* ---------- sidebar projects tree ---------- */
+/* borderless like the meeting list below it — the tree flows in the sidebar
+   (mockup), not a boxed panel. No ::branch rule: styling it would replace the
+   platform expand arrows, which we want to keep. */
+QTreeWidget#SidebarTree {{ background: transparent; border: none; outline: none; }}
+QTreeWidget#SidebarTree::item {{
+    color: {t['text']};
+    border-radius: 10px;
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-left: 3px solid transparent;
+}}
+QTreeWidget#SidebarTree::item:hover {{ background-color: {t['surface_hover']}; }}
+QTreeWidget#SidebarTree::item:selected {{
+    background-color: {t['primary_soft']};
+    color: {t['text']};
+    border-left: 3px solid {t['primary']};
+}}
+
 /* ---------- meeting list ---------- */
 QListWidget {{ background: transparent; border: none; outline: none; }}
 QListWidget::item {{

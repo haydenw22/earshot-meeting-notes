@@ -443,7 +443,6 @@ class HomePage(QWidget):
             todo_card = self._todo_card(pending, meetings)
             if todo_card is not None:
                 self.rail_lay.addWidget(todo_card)
-        self.rail_lay.addWidget(self._notes_mini_card(meetings))
         self.rail_lay.addWidget(self._ai_insights_card())
         self.rail_lay.addStretch(1)
 
@@ -816,62 +815,6 @@ class HomePage(QWidget):
             notes["action_items"] = actions
             self.repo.update(mid, notes_json=json.dumps(notes))
         QTimer.singleShot(0, self.refresh)
-
-    # ---------- "Meeting notes" mini-card ----------
-    def _notes_mini_card(self, meetings: list) -> QWidget:
-        card = Card(shadow=True)
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(18, 16, 18, 14)
-        lay.setSpacing(8)
-
-        head = QHBoxLayout()
-        head.setSpacing(6)
-        ic = QLabel()
-        ic.setPixmap(icons.pixmap("file", self.theme.color("primary"), 16))
-        head.addWidget(ic)
-        t = QLabel("Meeting notes")
-        t.setObjectName("H3")
-        head.addWidget(t)
-        head.addStretch(1)
-        lay.addLayout(head)
-
-        recent = meetings[:4]
-        if not recent:
-            none_lbl = QLabel("No meetings yet")
-            none_lbl.setObjectName("Faint")
-            lay.addWidget(none_lbl)
-        for m in recent:
-            lay.addWidget(self._mini_note_row(m))
-
-        footer = QPushButton("View all notes →")
-        footer.setProperty("variant", "ghost")
-        footer.setCursor(Qt.CursorShape.PointingHandCursor)
-        footer.setStyleSheet(f"QPushButton{{color:{self.theme.color('primary')}; text-align:center;}}")
-        footer.clicked.connect(self._view_all_notes)
-        lay.addWidget(footer)
-        return card
-
-    def _mini_note_row(self, m: Meeting) -> QWidget:
-        row = _ClickableCard(lambda mid=m.id: self.shell.open_meeting(mid), shadow=False)
-        row.setStyleSheet("QFrame#Card{border:none; background:transparent;}")
-        rl = QVBoxLayout(row)
-        rl.setContentsMargins(0, 4, 0, 4)
-        rl.setSpacing(1)
-        title = QLabel(m.title or "Untitled meeting")
-        title.setTextFormat(Qt.TextFormat.PlainText)
-        title.setWordWrap(False)
-        fm = title.fontMetrics()
-        title.setText(fm.elidedText(m.title or "Untitled meeting", Qt.TextElideMode.ElideRight, _RAIL_WIDTH - 24))
-        rl.addWidget(title)
-        date_lbl = QLabel(m.date_text or m.date_iso or "")
-        date_lbl.setObjectName("Faint")
-        rl.addWidget(date_lbl)
-        return row
-
-    def _view_all_notes(self) -> None:
-        self._folder_filter = None
-        self.refresh()
-        self.scroll.verticalScrollBar().setValue(0)
 
     # ---------- "AI insights" card ----------
     def _ai_insights_card(self) -> QWidget:
