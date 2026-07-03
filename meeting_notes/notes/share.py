@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html as _html
 
+from ..util.dues import due_label
 from .render import _bold_html
 
 _CSS = """
@@ -80,9 +81,11 @@ def to_share_html(m, *, include_transcript: bool = False) -> str:
             box = "&#9745;" if done else "&#9744;"
             task = _bold_html(a.get("task") or "")
             owner = f' · <span class="owner">{_html.escape(a["owner"])}</span>' if a.get("owner") else ""
+            due = due_label(a.get("due"))
+            due_bit = f' &middot; due {_html.escape(due)}' if due else ""
             cls = ' class="done"' if done else ""
             sug = "" if a.get("confirmed", True) or done else ' <span class="done">(suggested)</span>'
-            parts.append(f"<li>{box} <span{cls}>{task}</span>{owner}{sug}</li>")
+            parts.append(f"<li>{box} <span{cls}>{task}</span>{owner}{due_bit}{sug}</li>")
         parts.append("</ul>")
 
     for sec in notes.get("sections") or []:

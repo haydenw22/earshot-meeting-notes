@@ -116,6 +116,9 @@ class Config:
     # --- Misc ---
     keep_audio: bool = True               # retain raw + 2-channel audio after summary
 
+    # --- Account (local-only today; groundwork for future hosted sync) ---
+    account_name: str = ""                # display name for the sidebar account card; "" -> "Guest"
+
     extra: dict = field(default_factory=dict)
 
     @classmethod

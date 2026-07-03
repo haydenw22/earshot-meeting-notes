@@ -74,14 +74,25 @@ def main() -> int:
     shell.show_settings(); app.processEvents()
     s = shell.settings
     s.dashboard_toggle.setChecked(False)
-    s.webhook_url.setText("https://example.com/hook")
     s.ci_toggle.setChecked(True)
     s.ci_text.setPlainText("Use British English.")
     s._save(); app.processEvents()
     reloaded = Config.load()
     assert reloaded.show_dashboard is False
-    assert reloaded.webhook_url == "https://example.com/hook"
     assert reloaded.custom_instructions == "Use British English."
+
+    # webhook now lives on the Integrations page (moved out of Settings -> General
+    # in Phase D) — same round-trip check, new home
+    shell.show_integrations(); app.processEvents()
+    assert shell.stack.currentWidget() is shell.integrations
+    shell.integrations.webhook_url.setText("https://example.com/hook")
+    shell.integrations._save(); app.processEvents()
+    reloaded2 = Config.load()
+    assert reloaded2.webhook_url == "https://example.com/hook"
+
+    # Account page switches the stack too
+    shell.show_account(); app.processEvents()
+    assert shell.stack.currentWidget() is shell.account
 
     theme.toggle(); app.processEvents()      # light -> dark, refresh all pages
     shell.show_home(); app.processEvents()

@@ -95,7 +95,7 @@ def main() -> int:
 
     created = []
     orig_create = todoist.create_task
-    todoist.create_task = lambda tok, content, description="", timeout=15.0: (created.append(content) or "T1")
+    todoist.create_task = lambda tok, content, description="", due_date=None, timeout=15.0: (created.append(content) or "T1")
     try:
         notes_copy = json.loads(json.dumps(NOTES))
         sent, _sk = todoist.send_open_items("tok", notes_copy, meeting_title="M", date_text="d")

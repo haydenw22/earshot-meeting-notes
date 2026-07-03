@@ -180,16 +180,16 @@ def main() -> int:
     shell_repo.close()
 
     # ---------------------------------------------------------------
-    print("== record page: folder_combo lists 'No folder' + created folders ==")
+    print("== record page: folder_combo lists 'No project' + created folders ==")
     rec_repo = new_repo()
     rf = rec_repo.create_folder("Sales", "#22C55E")
     record = RecordPage(_Shell(), rec_repo, Config(), theme)
     record.on_shown()
     app.processEvents()
     combo_texts = [record.folder_combo.itemText(i) for i in range(record.folder_combo.count())]
-    check("folder_combo starts with 'No folder'", combo_texts[0] == "No folder")
+    check("folder_combo starts with 'No project'", combo_texts[0] == "No project")
     check("folder_combo lists the created folder", "Sales" in combo_texts)
-    check("folder_combo ends with the 'New folder' entry", combo_texts[-1].endswith("New folder…"))
+    check("folder_combo ends with the 'New project' entry", combo_texts[-1].endswith("New project…"))
 
     print("== record page: starting a recording with a folder selected stores folder_id ==")
     idx = record.folder_combo.findData(rf.id)
@@ -203,11 +203,11 @@ def main() -> int:
     created = rec_repo.create(date_text="d", date_iso="2026-07-02", attendees=[], folder_id=resolved_folder_id)
     check("meeting created this way carries the folder_id", rec_repo.get(created.id).folder_id == rf.id)
 
-    # data=None ("No folder") must resolve to folder_id=None, and the sentinel
+    # data=None ("No project") must resolve to folder_id=None, and the sentinel
     # "__new__" (if somehow left selected) must never leak into repo.create()
     record.folder_combo.setCurrentIndex(0)
     folder_data0 = record.folder_combo.currentData()
-    check("'No folder' resolves to folder_id=None", (folder_data0 if folder_data0 != "__new__" else None) is None)
+    check("'No project' resolves to folder_id=None", (folder_data0 if folder_data0 != "__new__" else None) is None)
     rec_repo.close()
 
     # ---------------------------------------------------------------
@@ -269,7 +269,7 @@ def main() -> int:
     ask_repo.close()
 
     # ---------------------------------------------------------------
-    print("== detail page: move_menu lists 'No folder' + folders; triggering moves the meeting ==")
+    print("== detail page: move_menu lists 'No project' + folders; triggering moves the meeting ==")
     det_repo = new_repo()
     df = det_repo.create_folder("Ops", "#14B8A6")
     dm = det_repo.create(date_text="d", date_iso="2026-07-02", attendees=[])
@@ -279,9 +279,9 @@ def main() -> int:
     page = DetailPage(detail_shell, det_repo, Config(), theme)
     page.load(dm.id)
     move_texts = [a.text() for a in page.move_menu.actions()]
-    check("move_menu contains 'No folder'", "No folder" in move_texts)
+    check("move_menu contains 'No project'", "No project" in move_texts)
     check("move_menu contains the Ops folder", "Ops" in move_texts)
-    check("move_menu contains 'New folder…'", "New folder…" in move_texts)
+    check("move_menu contains 'New project…'", "New project…" in move_texts)
 
     # current location is marked with a check ICON (checkable indicators render
     # awkwardly next to icons in QMenu, so the design uses icons only)
@@ -294,7 +294,7 @@ def main() -> int:
     check("shell was notified so the sidebar refreshes", getattr(detail_shell, "notified", False))
 
     page._move_to_folder(None)
-    check("moving back to 'No folder' unfiles the meeting", det_repo.get(dm.id).folder_id is None)
+    check("moving back to 'No project' unfiles the meeting", det_repo.get(dm.id).folder_id is None)
     det_repo.close()
 
     print("\nFOLDERS TESTS PASSED")

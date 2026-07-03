@@ -47,3 +47,5 @@ jobs:
           python tests/test_overlay.py
           python tests/test_input_warning.py
           python tests/test_ui_smoke.py
+          python tests/test_due_dates.py
+          python tests/test_pages.py

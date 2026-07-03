@@ -4,6 +4,26 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] — 2026-07-03 · Home redesign, projects, due dates & accounts preview
+
+### Added
+
+- The home page was redesigned: a big "Record a new meeting" hero card, filter chips, compact meeting rows with a ⋮ menu (Open, Move to project, Delete), and a right-hand rail with your to-do list, recent meeting notes and an AI-insights shortcut. The rail steps aside automatically on narrow windows.
+- Action items can carry a due date. The AI only fills one in when the meeting actually states a deadline — and like every suggestion it still needs your approval. Add or change a date on any item with the little calendar button (on the meeting page or the home to-do list); chips show Overdue / Today / the date, and due dates are passed to Todoist.
+- The to-do card shows how much you've completed and can switch between a top-6 view and everything; Mark-all-done and Clear-all moved into its ⋮ menu.
+- New Integrations page in the sidebar: Todoist and the automation webhook moved there from Settings, with Slack, Notion and Calendar marked as coming soon (Zapier and Make already work today via the webhook).
+- New Account page and sidebar account card: set a display name now; Earshot Cloud (sync across devices, hosted transcription) is shown as a preview — no account is required and everything stays on your PC.
+- A light/dark toggle slider in the sidebar replaces the old theme button.
+
+### Changed
+
+- Folders are now called projects everywhere in the app (your data is unchanged).
+- "Home" in the sidebar is now "Overview", and the header's New-recording button matches the app's indigo accent.
+
+### Fixed
+
+- The Move-to-project submenu now uses exactly the same row spacing as the More menu it opens from, so the two read as one control.
+
 ## [0.20.0] — 2026-07-03 · Calmer call detection & menu polish
 
 ### Changed

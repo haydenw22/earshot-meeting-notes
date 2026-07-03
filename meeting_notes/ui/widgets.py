@@ -3,12 +3,20 @@ separators. Keeps the pages declarative and the look consistent.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import datetime as _dt
+
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCalendarWidget,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGraphicsDropShadowEffect,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -82,3 +90,98 @@ FOLDER_COLORS = [
     ("Purple", "#A855F7"),
     ("Pink", "#EC4899"),
 ]
+
+
+class _DueDateDialog(QDialog):
+    """A small themed popup: a calendar preselected to `current` (or today),
+    plus Clear date / Cancel / Set date."""
+
+    def __init__(self, parent, theme, current: str | None):
+        super().__init__(parent)
+        self.theme = theme
+        self.setWindowTitle("Set due date")
+        self.setMinimumWidth(320)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(12)
+
+        from ..util.dues import parse_due
+        start = parse_due(current) or _dt.date.today()
+
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(False)
+        self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        self.calendar.setSelectedDate(QDate(start.year, start.month, start.day))
+        self.calendar.setStyleSheet(self._calendar_qss())
+        v.addWidget(self.calendar)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        clear_btn = QPushButton("Clear date")
+        clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_btn.clicked.connect(self._on_clear)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        v.addLayout(btn_row)
+
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Set date")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        v.addWidget(self.buttons)
+
+        self._cleared = False
+
+    def _on_clear(self) -> None:
+        self._cleared = True
+        self.accept()
+
+    def result_iso(self) -> str | None:
+        """None if the user hit Clear date; otherwise the selected date's ISO string."""
+        if self._cleared:
+            return None
+        qd = self.calendar.selectedDate()
+        return _dt.date(qd.year(), qd.month(), qd.day()).isoformat()
+
+    def _calendar_qss(self) -> str:
+        """Minimal theming so the calendar navigation bar and popup menus don't
+        look alien against the app's dark/light surfaces — deliberately light-touch,
+        just enough to keep contrast sane in both themes."""
+        t = self.theme
+        return f"""
+QCalendarWidget QWidget {{ background-color: {t.color('surface')}; color: {t.color('text')}; }}
+QCalendarWidget QToolButton {{
+    background-color: transparent; color: {t.color('text')};
+    border: none; border-radius: 8px; padding: 4px 8px; font-weight: 600;
+}}
+QCalendarWidget QToolButton:hover {{ background-color: {t.color('surface_hover')}; }}
+QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+QCalendarWidget QMenu {{
+    background-color: {t.color('surface')}; color: {t.color('text')};
+    border: 1px solid {t.color('border')}; border-radius: 10px;
+}}
+QCalendarWidget QSpinBox {{
+    background-color: {t.color('surface')}; color: {t.color('text')};
+    border: 1px solid {t.color('border_strong')}; border-radius: 6px; padding: 2px 4px;
+}}
+QCalendarWidget QAbstractItemView:enabled {{
+    background-color: {t.color('surface')}; color: {t.color('text')};
+    selection-background-color: {t.color('primary')}; selection-color: {t.color('on_primary')};
+}}
+QCalendarWidget QAbstractItemView:disabled {{ color: {t.color('text_faint')}; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ background-color: {t.color('surface_hover')}; }}
+"""
+
+
+def pick_due_date(parent, theme, current: str | None) -> tuple[str | None, bool]:
+    """Open a small themed date picker. Returns (iso_or_None, accepted_bool):
+    - (None, False)      — user cancelled: caller must leave the due date untouched.
+    - (None, True)       — user cleared the date.
+    - ("YYYY-MM-DD", True) — user picked/kept a date.
+    """
+    dlg = _DueDateDialog(parent, theme, current)
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None, False
+    return dlg.result_iso(), True

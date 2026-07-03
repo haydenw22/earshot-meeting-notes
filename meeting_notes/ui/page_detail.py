@@ -181,7 +181,7 @@ class DetailPage(QWidget):
         self.act_resummarise = self.more_menu.addAction("Re-summarise", self._resummarise)
         self.act_reprocess = self.more_menu.addAction("Re-transcribe", self._reprocess)
         self.act_folder = self.more_menu.addAction("Open audio folder", self._open_folder)
-        self.move_menu = self.more_menu.addMenu("Move to folder")
+        self.move_menu = self.more_menu.addMenu("Move to project")
         self.more_btn.setMenu(self.more_menu)
 
     def _action(self, text: str, slot) -> QPushButton:
@@ -259,20 +259,18 @@ class DetailPage(QWidget):
             act.triggered.connect(slot)
             return act
 
+        # no separators: rows flow exactly like the parent More menu so the two
+        # read as one congruent control
         here = m.folder_id is None
         add("check" if here else "folder", self.theme.color("text_faint"),
-            "No folder", lambda _=False: self._move_to_folder(None))
+            "No project", lambda _=False: self._move_to_folder(None))
 
-        folders = self.repo.list_folders()
-        if folders:
-            self.move_menu.addSeparator()
-            for f in folders:
-                here = m.folder_id == f.id
-                add("check" if here else "folder", f.color, f.name,
-                    lambda _=False, fid=f.id: self._move_to_folder(fid))
+        for f in self.repo.list_folders():
+            here = m.folder_id == f.id
+            add("check" if here else "folder", f.color, f.name,
+                lambda _=False, fid=f.id: self._move_to_folder(fid))
 
-        self.move_menu.addSeparator()
-        add("plus", self.theme.color("text_muted"), "New folder…", self._move_to_new_folder)
+        add("plus", self.theme.color("text_muted"), "New project…", self._move_to_new_folder)
 
     def _move_to_folder(self, folder_id) -> None:
         if self.meeting_id is None:
@@ -448,6 +446,49 @@ class DetailPage(QWidget):
         lbl.setText(task + suffix)
         return lbl
 
+    def _due_chip_btn(self, idx: int, a: dict) -> QPushButton:
+        """A small flat pill showing the due label, coloured by severity.
+        Clicking it reopens the date picker on that same item."""
+        from ..util.dues import due_label, due_severity
+
+        severity_colors = {
+            "overdue": ("danger", "danger_soft"),
+            "today": ("warning", "warning_soft"),
+            "future": ("text_muted", "surface_hover"),
+        }
+        sev = due_severity(a.get("due"))
+        fg_role, bg_role = severity_colors.get(sev, ("text_muted", "surface_hover"))
+        fg, bg = self.theme.color(fg_role), self.theme.color(bg_role)
+        btn = QPushButton(due_label(a.get("due")))
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip("Change due date")
+        btn.setStyleSheet(
+            f"QPushButton{{background:{bg}; color:{fg}; border:none; border-radius:9px;"
+            f"padding:3px 10px; font-size:12px; font-weight:600;}}"
+            f"QPushButton:hover{{background:{self.theme.color('surface_press')};}}"
+        )
+        btn.clicked.connect(lambda _=False, i=idx: self._pick_row_due(i))
+        return btn
+
+    def _pick_row_due(self, idx: int) -> None:
+        """Open the date picker for action item `idx` and persist the result."""
+        if self.meeting_id is None:
+            return
+        m = self.repo.get(self.meeting_id)
+        actions = (m.notes or {}).get("action_items") or []
+        current = actions[idx].get("due") if 0 <= idx < len(actions) else None
+        from .widgets import pick_due_date
+        iso, accepted = pick_due_date(self, self.theme, current)
+        if not accepted:
+            return
+        self._set_due(idx, iso)
+
+    def _set_due(self, idx: int, iso_or_none: str | None) -> None:
+        def fn(actions):
+            if 0 <= idx < len(actions) and isinstance(actions[idx], dict):
+                actions[idx]["due"] = iso_or_none
+        self._mutate_actions(fn)
+
     def _action_row(self, idx: int, a: dict) -> QWidget:
         if not isinstance(a, dict):
             a = {"task": str(a)}
@@ -486,6 +527,13 @@ class DetailPage(QWidget):
             keep.clicked.connect(lambda _=False, i=idx: self._confirm_action(i))
             rl.addWidget(keep, 0, Qt.AlignmentFlag.AlignTop)
 
+        if a.get("due"):
+            rl.addWidget(self._due_chip_btn(idx, a), 0, Qt.AlignmentFlag.AlignTop)
+        else:
+            add_due = self._mini_icon_btn("calendar", "Set due date")
+            add_due.clicked.connect(lambda _=False, i=idx: self._pick_row_due(i))
+            rl.addWidget(add_due, 0, Qt.AlignmentFlag.AlignTop)
+
         edit = self._mini_icon_btn("pencil", "Edit this action item")
         edit.clicked.connect(lambda _=False, i=idx, item=dict(a), r=row: self._begin_action_edit(r, i, item))
         rl.addWidget(edit, 0, Qt.AlignmentFlag.AlignTop)
@@ -496,7 +544,9 @@ class DetailPage(QWidget):
         return row
 
     def _begin_action_edit(self, row: QWidget, idx: int, a: dict) -> None:
-        """Swap the row content for inline task/owner editors."""
+        """Swap the row content for inline task/owner/due editors."""
+        from ..util.dues import due_label
+
         rl = row.layout()
         while rl.count():
             item = rl.takeAt(0)
@@ -509,11 +559,27 @@ class DetailPage(QWidget):
         owner_edit = QLineEdit(a.get("owner") or "")
         owner_edit.setPlaceholderText("Owner (optional)")
         owner_edit.setFixedWidth(150)
+
+        # the pending due value lives in a closure var, changed by the "Due…"
+        # mini button, committed alongside task/owner on Save
+        due_state = {"due": a.get("due")}
+        due_btn = self._mini_btn(due_label(due_state["due"]) or "Due…", "Set due date")
+
+        def pick_due() -> None:
+            from .widgets import pick_due_date
+            iso, accepted = pick_due_date(self, self.theme, due_state["due"])
+            if not accepted:
+                return
+            due_state["due"] = iso
+            due_btn.setText(due_label(iso) or "Due…")
+
+        due_btn.clicked.connect(pick_due)
+
         save = self._mini_btn("Save", "Save changes", accent=True)
         cancel = self._mini_btn("Cancel", "Discard changes")
 
         def commit() -> None:
-            self._apply_action_edit(idx, task_edit.text(), owner_edit.text())
+            self._apply_action_edit(idx, task_edit.text(), owner_edit.text(), due_state["due"])
 
         save.clicked.connect(commit)
         task_edit.returnPressed.connect(commit)
@@ -521,6 +587,7 @@ class DetailPage(QWidget):
         cancel.clicked.connect(self.refresh)
         rl.addWidget(task_edit, 1)
         rl.addWidget(owner_edit)
+        rl.addWidget(due_btn)
         rl.addWidget(save)
         rl.addWidget(cancel)
         task_edit.setFocus()
@@ -576,7 +643,7 @@ class DetailPage(QWidget):
                 del actions[idx]
         self._mutate_actions(fn)
 
-    def _apply_action_edit(self, idx: int, task: str, owner: str) -> None:
+    def _apply_action_edit(self, idx: int, task: str, owner: str, due: str | None = None) -> None:
         task = (task or "").strip()
         if not task:  # an emptied task is a dismissal
             self._dismiss_action(idx)
@@ -586,6 +653,7 @@ class DetailPage(QWidget):
             if 0 <= idx < len(actions) and isinstance(actions[idx], dict):
                 actions[idx]["task"] = task
                 actions[idx]["owner"] = (owner or "").strip() or None
+                actions[idx]["due"] = due
         self._mutate_actions(fn)
 
     # ---------- bookmarks ----------
@@ -869,7 +937,7 @@ class DetailPage(QWidget):
         if not (self.cfg.todoist_token or "").strip():
             QMessageBox.information(
                 self, "Todoist not connected",
-                "Add your Todoist API token in Settings → General → Todoist first.\n"
+                "Add your Todoist API token in Integrations → Todoist first.\n"
                 "(Todoist → Settings → Integrations → Developer → API token.)")
             return
         repo, cfg, mid = self.repo, self.cfg, self.meeting_id

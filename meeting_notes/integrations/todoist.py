@@ -27,19 +27,23 @@ def ping(token: str, timeout: float = 8.0) -> bool:
         return False
 
 
-def create_task(token: str, content: str, description: str = "", timeout: float = 15.0) -> str:
+def create_task(token: str, content: str, description: str = "", due_date: str | None = None,
+                 timeout: float = 15.0) -> str:
     """Create one task; returns its Todoist id."""
+    payload = {"content": content, "description": description}
+    if due_date:
+        payload["due_date"] = due_date  # Todoist REST v2: plain YYYY-MM-DD
     try:
         r = httpx.post(
             f"{_API}/tasks",
             headers={"Authorization": f"Bearer {token}"},
-            json={"content": content, "description": description},
+            json=payload,
             timeout=timeout,
         )
     except httpx.HTTPError as e:
         raise TodoistError(f"could not reach Todoist: {e}") from e
     if r.status_code in (401, 403):
-        raise TodoistError("Todoist rejected the token — check Settings → General.")
+        raise TodoistError("Todoist rejected the token — check Integrations.")
     if r.status_code == 429:
         raise TodoistError("Todoist rate-limited the request; try again in a minute.")
     if r.status_code not in (200, 204):
@@ -54,7 +58,7 @@ def send_open_items(token: str, notes: dict, *, meeting_title: str, date_text: s
     """Create a task for every OPEN action item that hasn't been sent before.
     Mutates the items in `notes` (adds todoist_id). Returns (sent, skipped)."""
     if not (token or "").strip():
-        raise TodoistError("No Todoist token configured (Settings → General).")
+        raise TodoistError("No Todoist token configured (Integrations).")
     sent = skipped = 0
     for a in notes.get("action_items") or []:
         if not isinstance(a, dict) or a.get("done"):
@@ -69,6 +73,6 @@ def send_open_items(token: str, notes: dict, *, meeting_title: str, date_text: s
             continue
         owner = f"Owner: {a['owner']}\n" if a.get("owner") else ""
         desc = f"{owner}From meeting: {meeting_title} ({date_text}) — via Earshot"
-        a["todoist_id"] = create_task(token, task, desc)
+        a["todoist_id"] = create_task(token, task, desc, due_date=a.get("due"))
         sent += 1
     return sent, skipped

@@ -12,6 +12,8 @@ import html as _html
 import re as _re
 from typing import Optional
 
+from ..util.dues import due_label
+
 
 def _bold_html(text: str) -> str:
     """Escape, then turn **bold** into <b> (drops the asterisks)."""
@@ -46,9 +48,11 @@ def to_html(notes: dict, *, title: str = "", date_text: str = "", attendees: Opt
             box = "&#9745;" if a.get("done") else "&#9744;"  # ☑ / ☐
             task = _bold_html(a.get("task") or "")
             owner = f" — <b>{_html.escape(a['owner'])}</b>" if a.get("owner") else ""
+            due = due_label(a.get("due"))
+            due_bit = f" &middot; due {_html.escape(due)}" if due else ""
             sug = ('' if a.get("confirmed", True) or a.get("done")
                    else ' <i style="color:#999;">(suggested)</i>')
-            rows.append(f'<li style="list-style:none;">{box} {task}{owner}{sug}</li>')
+            rows.append(f'<li style="list-style:none;">{box} {task}{owner}{due_bit}{sug}</li>')
         parts.append(f'<ul style="padding-left:0;">{"".join(rows)}</ul>')
 
     for sec in notes.get("sections") or []:
@@ -76,8 +80,10 @@ def to_plaintext(notes: dict, *, title: str = "", date_text: str = "", attendees
         for a in actions:
             box = "☑" if a.get("done") else "☐"  # ☑ / ☐
             owner = f" — {a['owner']}" if a.get("owner") else ""
+            due = due_label(a.get("due"))
+            due_bit = f" — due {due}" if due else ""
             sug = "" if a.get("confirmed", True) or a.get("done") else "  (suggested)"
-            lines.append(f"  {box} {_strip_md(a.get('task') or '')}{owner}{sug}")
+            lines.append(f"  {box} {_strip_md(a.get('task') or '')}{owner}{due_bit}{sug}")
 
     for sec in notes.get("sections") or []:
         if sec.get("heading"):

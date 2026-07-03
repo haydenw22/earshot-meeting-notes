@@ -118,7 +118,7 @@ def main() -> int:
     print("== todoist: send + dedupe ==")
     created = []
 
-    def fake_create(token, content, description="", timeout=15.0):
+    def fake_create(token, content, description="", due_date=None, timeout=15.0):
         created.append(content)
         return f"T-{len(created)}"
 

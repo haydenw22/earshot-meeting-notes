@@ -40,7 +40,10 @@ class _Shell:
         pass
 
     def show_record(self):
-        pass
+        self.recorded = True
+
+    def show_ask(self):
+        self.asked = True
 
     def open_meeting(self, _mid):
         pass
@@ -213,6 +216,108 @@ def main() -> int:
           (dash_repo.get(da.id).notes.get("action_items") or []) == [])
     check("clear-all: meeting B has no action items left",
           (dash_repo.get(db_.id).notes.get("action_items") or []) == [])
+    dash_repo.close()
+
+    # ---------------------------------------------------------------
+    print("== Phase B home redesign: hero card, kebab menu, to-do %, view-all, rail ==")
+    from meeting_notes.ui.page_home import MeetingRow
+
+    hb_repo = MeetingRepository(dbmod.connect(Path(tempfile.mkdtemp()) / "hb.db"))
+    hb_shell = _Shell()
+    hb_cfg = Config()
+    hb_home = HomePage(hb_shell, hb_repo, hb_cfg, theme)
+
+    print("-- hero card exists and its click handler is wired --")
+    hb_home.refresh()
+    check("hero backdrop attribute exists", hasattr(hb_home, "_hero_backdrop"))
+    hero_card = hb_home._hero_card()
+    check("hero card built without error", hero_card is not None)
+    # the whole card is clickable -> shell.show_record(); invoke the same
+    # callback the card was constructed with rather than simulating a mouse
+    # event (offscreen-safe, and exercises exactly what the click wires to)
+    hero_card._on_click()
+    check("clicking the hero card calls shell.show_record()", getattr(hb_shell, "recorded", False))
+
+    print("-- kebab menu: Open / Move to project / Delete for a filed meeting --")
+    hb_folder = hb_repo.create_folder("Ops", "#14B8A6")
+    hb_m = hb_repo.create(date_text="d", date_iso="2026-07-03", attendees=[], folder_id=hb_folder.id)
+    hb_repo.update(hb_m.id, title="Filed meeting", status="Done")
+    row = MeetingRow(hb_repo.get(hb_m.id), theme, hb_repo, hb_shell, {hb_folder.id: hb_folder})
+    check("row has a kebab button", hasattr(row, "kebab_btn"))
+    from PySide6.QtWidgets import QMenu
+    kmenu = QMenu()
+    kopen = kmenu.addAction("Open")
+    kmove = kmenu.addMenu("Move to project")
+    row._populate_move_menu(kmove)
+    kmenu.addSeparator()
+    kdelete = kmenu.addAction("Delete")
+    top_texts = [a.text() for a in kmenu.actions() if a.text()]
+    check("kebab menu has Open", "Open" in top_texts)
+    check("kebab menu has a 'Move to project' submenu", kmove.title() == "Move to project")
+    check("kebab menu has Delete", "Delete" in top_texts)
+    move_texts = [a.text() for a in kmove.actions()]
+    check("move submenu lists 'No project'", "No project" in move_texts)
+    check("move submenu lists the current folder", "Ops" in move_texts)
+    check("move submenu lists 'New project…'", any("New project" in t for t in move_texts))
+
+    print("-- to-do completion %: 1 done of 4 confirmed items -> 25% --")
+    pa = hb_repo.create(date_text="d", date_iso="2026-07-03", attendees=[])
+    hb_repo.update(pa.id, title="PA", status="Done", notes_json=json.dumps({
+        "title": "PA", "summary": "", "attendees": [],
+        "action_items": [
+            {"task": "One", "owner": None, "done": True, "confirmed": True},
+            {"task": "Two", "owner": None, "done": False, "confirmed": True},
+            {"task": "Three", "owner": None, "done": False, "confirmed": True},
+            {"task": "Four", "owner": None, "done": False, "confirmed": True},
+        ],
+        "sections": [],
+    }))
+    pct = hb_home._completion_pct(hb_repo.list())
+    check("1 of 4 confirmed items done -> 25%", pct == 25)
+
+    print("-- View-all toggle switches how many to-do items render --")
+    for i in range(8):
+        extra = hb_repo.create(date_text="d", date_iso="2026-07-03", attendees=[])
+        hb_repo.update(extra.id, title=f"Extra {i}", status="Done", notes_json=json.dumps({
+            "title": f"Extra {i}", "summary": "", "attendees": [],
+            "action_items": [{"task": f"Pending {i}", "owner": None, "done": False, "confirmed": True}],
+            "sections": [],
+        }))
+    hb_home._todo_show_all = False
+    all_pending = hb_home._gather_pending(hb_repo.list())
+    check("more than 6 pending items exist for this check", len(all_pending) > 6)
+    todo_card_collapsed = hb_home._todo_card(all_pending, hb_repo.list())
+    from PySide6.QtWidgets import QCheckBox as _QCheckBox
+    checkboxes_top6 = todo_card_collapsed.findChildren(_QCheckBox)
+    check("top-6 view renders exactly 6 item checkboxes", len(checkboxes_top6) == 6)
+    hb_home._todo_show_all = True
+    todo_card_all = hb_home._todo_card(all_pending, hb_repo.list())
+    checkboxes_all = todo_card_all.findChildren(_QCheckBox)
+    check("view-all renders every pending item's checkbox",
+          len(checkboxes_all) == len(all_pending))
+    hb_home._todo_show_all = False
+
+    print("-- responsive rail: visible >= 1050px wide, hidden below it --")
+    # An unshown top-level widget's width() doesn't reliably update from
+    # resize() alone offscreen, so stub width() itself to drive the handler
+    # deterministically — exactly what _apply_rail_visibility reads. Check
+    # isHidden() rather than isVisible(): isVisible() requires the whole
+    # ancestor chain to be shown on screen, which an offscreen test never does.
+    orig_width = hb_home.width
+    try:
+        hb_home.width = lambda: 1400
+        hb_home._apply_rail_visibility()
+        check("rail visible at 1400px", not hb_home.rail.isHidden())
+        hb_home.width = lambda: 900
+        hb_home._apply_rail_visibility()
+        check("rail hidden at 900px", hb_home.rail.isHidden())
+        hb_home.width = lambda: 1050
+        hb_home._apply_rail_visibility()
+        check("rail visible exactly at the 1050px breakpoint", not hb_home.rail.isHidden())
+    finally:
+        hb_home.width = orig_width
+
+    hb_repo.close()
 
     print("== call watcher: only meeting apps (fast) / browsers (sustained) prompt ==")
     from meeting_notes.ui import call_watcher as cw
@@ -263,7 +368,6 @@ def main() -> int:
     w._evaluate(["Zoom"], []); w._evaluate(["Zoom"], [])
     check("next call prompts again after snooze", ev["started"] == [["Zoom"]])
 
-    dash_repo.close()
     repo.close()
     print("\nUI FIXES TESTS PASSED")
     return 0

@@ -226,8 +226,8 @@ class RecordPage(QWidget):
         tbox.addWidget(tpl_lbl)
         tbox.addWidget(self.template_combo)
         sl.addWidget(self.template_box)
-        # folder — always visible (default remains no folder)
-        folder_lbl = QLabel("Folder")
+        # folder — always visible (default remains no project)
+        folder_lbl = QLabel("Project")
         folder_lbl.setObjectName("H3")
         sl.addWidget(folder_lbl)
         self.folder_combo = QComboBox()
@@ -531,10 +531,10 @@ class RecordPage(QWidget):
     def _populate_folder_combo(self, *, select_folder_id=None) -> None:
         self.folder_combo.blockSignals(True)
         self.folder_combo.clear()
-        self.folder_combo.addItem("No folder", None)
+        self.folder_combo.addItem("No project", None)
         for f in self.repo.list_folders():
             self.folder_combo.addItem(icons.icon("folder", f.color, 16), f.name, f.id)
-        self.folder_combo.addItem("＋ New folder…", "__new__")
+        self.folder_combo.addItem("＋ New project…", "__new__")
         if select_folder_id is not None:
             idx = self.folder_combo.findData(select_folder_id)
             if idx >= 0:

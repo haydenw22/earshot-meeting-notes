@@ -26,7 +26,7 @@ class _NewFolderDialog(QDialog):
         self.theme = theme
         self._color = _DEFAULT_COLOR
         self._swatches: list[QPushButton] = []
-        self.setWindowTitle("New folder")
+        self.setWindowTitle("New project")
         self.setMinimumWidth(320)
 
         v = QVBoxLayout(self)
@@ -110,7 +110,7 @@ def ask_new_folder(parent, theme) -> tuple[str, str] | None:
 def ask_rename_folder(parent, theme, current_name: str) -> str | None:
     """Prompt for a new name for an existing folder. Returns the new name, or
     None if cancelled/unchanged/blank."""
-    text, ok = QInputDialog.getText(parent, "Rename folder", "Name", QLineEdit.EchoMode.Normal, current_name)
+    text, ok = QInputDialog.getText(parent, "Rename project", "Name", QLineEdit.EchoMode.Normal, current_name)
     if not ok:
         return None
     text = text.strip()

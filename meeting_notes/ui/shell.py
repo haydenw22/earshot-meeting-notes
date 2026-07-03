@@ -4,7 +4,17 @@ navigation and broadcasts theme changes to every page.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QMimeData,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -29,9 +39,11 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from . import icons, logo
 from .folder_dialog import ask_new_folder, ask_rename_folder
+from .page_account import AccountPage
 from .page_ask import AskPage
 from .page_detail import DetailPage
 from .page_home import HomePage
+from .page_integrations import IntegrationsPage
 from .page_record import RecordPage
 from .page_settings import SettingsPage
 from .widgets import FOLDER_COLORS
@@ -140,6 +152,149 @@ class _FolderTree(QTreeWidget):
             event.ignore()
 
 
+class ThemeToggleSlider(QWidget):
+    """A ~64x30 pill switch replacing the old text theme button: a sun glyph on
+    the left, a moon glyph on the right, and a 24px knob that slides left (light)
+    or right (dark). The knob's position is a real Qt property so a
+    QPropertyAnimation can tween it smoothly instead of jump-cutting."""
+
+    _WIDTH = 64
+    _HEIGHT = 30
+    _KNOB = 24
+    _MARGIN = 3
+
+    def __init__(self, theme, on_toggle, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self._on_toggle = on_toggle
+        self._knob_pos = 0.0  # 0.0 = left (light), 1.0 = right (dark)
+        self.setFixedSize(self._WIDTH, self._HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Switch light/dark theme")
+        self._anim = QPropertyAnimation(self, b"knobPos", self)
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._sync_to_mode(animate=False)
+
+    # ---- animated float property (knob position, 0..1) ----
+    def _get_knob_pos(self) -> float:
+        return self._knob_pos
+
+    def _set_knob_pos(self, value: float) -> None:
+        self._knob_pos = value
+        self.update()
+
+    knobPos = Property(float, _get_knob_pos, _set_knob_pos)  # noqa: N815 (Qt property naming)
+
+    def _sync_to_mode(self, *, animate: bool = True) -> None:
+        target = 1.0 if self.theme.mode == "dark" else 0.0
+        if not animate:
+            self._anim.stop()
+            self._knob_pos = target
+            self.update()
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._knob_pos)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint() if hasattr(event, "position") else event.pos()
+        ):
+            self._on_toggle()
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        track_rect = QRectF(0, 0, self._WIDTH, self._HEIGHT)
+        painter.setPen(QColor(self.theme.color("border_strong")))
+        painter.setBrush(QColor(self.theme.color("surface_hover")))
+        painter.drawRoundedRect(track_rect, self._HEIGHT / 2, self._HEIGHT / 2)
+
+        # sun (left) + moon (right) glyphs, muted so the knob reads as the focus
+        muted = self.theme.color("text_faint")
+        sun_pm = icons.pixmap("sun", muted, 14)
+        moon_pm = icons.pixmap("moon", muted, 14)
+        painter.drawPixmap(int(self._MARGIN + 2), int((self._HEIGHT - 14) / 2), sun_pm)
+        painter.drawPixmap(int(self._WIDTH - self._MARGIN - 16), int((self._HEIGHT - 14) / 2), moon_pm)
+
+        # knob: slides between the left rest position and the right rest position
+        travel = self._WIDTH - self._KNOB - 2 * self._MARGIN
+        knob_x = self._MARGIN + self._knob_pos * travel
+        knob_y = (self._HEIGHT - self._KNOB) / 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self.theme.color("primary")))
+        painter.drawEllipse(QRectF(knob_x, knob_y, self._KNOB, self._KNOB))
+        painter.end()
+
+    def apply_theme(self) -> None:
+        """Called on every theme flip: re-tints via repaint and (re)animates the
+        knob to the new side."""
+        self._sync_to_mode(animate=True)
+        self.update()
+
+
+class AccountCard(QFrame):
+    """Full-width flat hover-highlight row: avatar initial, name, 'Local account'
+    sub-label, chevron — click navigates to the Account page."""
+
+    def __init__(self, cfg, theme, on_click, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.theme = theme
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setObjectName("AccountCard")
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(10)
+
+        self.avatar = QLabel()
+        self.avatar.setFixedSize(32, 32)
+        self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.avatar)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(0)
+        self.name_lbl = QLabel()
+        self.name_lbl.setObjectName("H3")
+        texts.addWidget(self.name_lbl)
+        self.sub_lbl = QLabel("Local account")
+        self.sub_lbl.setObjectName("Faint")
+        texts.addWidget(self.sub_lbl)
+        lay.addLayout(texts, 1)
+
+        self.chevron = QLabel()
+        lay.addWidget(self.chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.refresh()
+
+    def refresh(self) -> None:
+        name = (self.cfg.account_name or "").strip() or "Guest"
+        self.name_lbl.setText(name)
+        self.avatar.setStyleSheet(
+            f"background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};"
+            f"border-radius:16px; font-size:13px; font-weight:700;"
+        )
+        self.avatar.setText(name[0].upper())
+        self.chevron.setPixmap(icons.pixmap("chevron-right", self.theme.color("text_faint"), 14))
+        self.setStyleSheet(
+            "#AccountCard{background:transparent; border:none; border-radius:10px;}"
+            f"#AccountCard:hover{{background:{self.theme.color('surface_hover')};}}"
+        )
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint() if hasattr(event, "position") else event.pos()
+        ):
+            self._on_click()
+        super().mouseReleaseEvent(event)
+
+
 class Shell(QMainWindow):
     def __init__(self, repo, cfg, theme):
         super().__init__()
@@ -155,6 +310,8 @@ class Shell(QMainWindow):
         self.detail = DetailPage(self, repo, cfg, theme)
         self.settings = SettingsPage(self, repo, cfg, theme)
         self.ask = AskPage(self, repo, cfg, theme)
+        self.integrations = IntegrationsPage(self, repo, cfg, theme)
+        self.account = AccountPage(self, repo, cfg, theme)
 
         self._build()
         self.theme.changed.connect(self._on_theme_changed)
@@ -182,7 +339,8 @@ class Shell(QMainWindow):
 
         self.sidebar = self._sidebar()
         self.stack = QStackedWidget()
-        for page in (self.home, self.record, self.detail, self.settings, self.ask):
+        for page in (self.home, self.record, self.detail, self.settings, self.ask,
+                     self.integrations, self.account):
             self.stack.addWidget(page)
 
         # A splitter makes the sidebar drag-resizable; its order flips for L/R.
@@ -282,21 +440,21 @@ class Shell(QMainWindow):
         lay.addWidget(self.search)
 
         # nav: home + ask
-        self.home_btn = self._nav_button("Home", self.show_home)
+        self.home_btn = self._nav_button("Overview", self.show_home)
         lay.addWidget(self.home_btn)
         self.ask_btn = self._nav_button("Ask Earshot", self.show_ask)
         lay.addWidget(self.ask_btn)
 
-        # ---- FOLDERS section ----
+        # ---- PROJECTS section (internal name/keys/DB stay folder_*) ----
         folders_head = QHBoxLayout()
         folders_head.setSpacing(4)
-        folders_sect = QLabel("FOLDERS")
+        folders_sect = QLabel("PROJECTS")
         folders_sect.setObjectName("SectionLabel")
         folders_head.addWidget(folders_sect)
         folders_head.addStretch(1)
         self.new_folder_btn = QToolButton()
         self.new_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.new_folder_btn.setToolTip("New folder")
+        self.new_folder_btn.setToolTip("New project")
         self.new_folder_btn.clicked.connect(self._new_folder)
         folders_head.addWidget(self.new_folder_btn)
         self.folders_chevron_btn = QToolButton()
@@ -340,11 +498,23 @@ class Shell(QMainWindow):
         self.meeting_list.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
         lay.addWidget(self.meeting_list, 1)
 
-        # bottom controls
+        # bottom cluster (mockup order): Integrations -> Settings -> theme
+        # toggle -> account card -> version label
+        self.integrations_btn = self._nav_button("Integrations", self.show_integrations)
+        lay.addWidget(self.integrations_btn)
         self.settings_btn = self._nav_button("Settings", self.show_settings)
         lay.addWidget(self.settings_btn)
-        self.theme_btn = self._nav_button("Dark mode", self._toggle_theme)
-        lay.addWidget(self.theme_btn)
+
+        theme_row = QHBoxLayout()
+        theme_row.addStretch(1)
+        self.theme_toggle = ThemeToggleSlider(self.theme, self._toggle_theme)
+        theme_row.addWidget(self.theme_toggle)
+        theme_row.addStretch(1)
+        lay.addLayout(theme_row)
+
+        self.account_card = AccountCard(self.cfg, self.theme, self.show_account)
+        lay.addWidget(self.account_card)
+
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("Faint")
         ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -367,6 +537,7 @@ class Shell(QMainWindow):
         self.home_btn.setChecked(which == "home")
         self.ask_btn.setChecked(which == "ask")
         self.settings_btn.setChecked(which == "settings")
+        self.integrations_btn.setChecked(which == "integrations")
 
     def _clear_selections(self) -> None:
         """Selection hygiene: only one of {list, tree} should ever show a
@@ -399,6 +570,24 @@ class Shell(QMainWindow):
         self.stack.setCurrentWidget(self.settings)
         self._set_active("settings")
         self._clear_selections()
+
+    def show_integrations(self) -> None:
+        self.integrations.apply_theme()
+        self.stack.setCurrentWidget(self.integrations)
+        self._set_active("integrations")
+        self._clear_selections()
+
+    def show_account(self) -> None:
+        self.account.apply_theme()
+        self.stack.setCurrentWidget(self.account)
+        self._set_active("none")
+        self._clear_selections()
+
+    def refresh_account_card(self) -> None:
+        """Called after the account display name changes (from the Account page)
+        so the sidebar card reflects it immediately."""
+        if hasattr(self, "account_card"):
+            self.account_card.refresh()
 
     def open_meeting(self, meeting_id: int, *, _from_tree: bool = False) -> None:
         self.detail.load(int(meeting_id))
@@ -622,7 +811,7 @@ class Shell(QMainWindow):
         self.folders_chevron_btn.setIcon(
             icons.icon("chevron-right" if collapsed else "chevron-down", self.theme.color("text_muted"), 14)
         )
-        self.folders_chevron_btn.setToolTip("Expand folders" if collapsed else "Collapse folders")
+        self.folders_chevron_btn.setToolTip("Expand projects" if collapsed else "Collapse projects")
 
     def _filter_list(self, text: str) -> None:
         text = (text or "").strip()
@@ -696,7 +885,7 @@ class Shell(QMainWindow):
             act = color_menu.addAction(self._color_icon(hexcolor), name)
             color_actions[act] = hexcolor
         menu.addSeparator()
-        delete_act = menu.addAction("Delete folder")
+        delete_act = menu.addAction("Delete project")
 
         chosen = menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
         if chosen is None:
@@ -731,7 +920,7 @@ class Shell(QMainWindow):
 
     def _delete_folder(self, folder_id: int, name: str) -> None:
         if QMessageBox.question(
-            self, "Delete folder",
+            self, "Delete project",
             f"Delete “{name}”? Its meetings are kept and become unfiled."
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -748,7 +937,8 @@ class Shell(QMainWindow):
     def _on_theme_changed(self, _mode: str) -> None:
         self._refresh_sidebar_icons()
         self._rebuild_list()
-        for page in (self.home, self.record, self.detail, self.settings, self.ask):
+        for page in (self.home, self.record, self.detail, self.settings, self.ask,
+                     self.integrations, self.account):
             page.apply_theme()
         # rebuild colour-dependent content
         self.home.refresh()
@@ -763,12 +953,14 @@ class Shell(QMainWindow):
         self.import_btn.setIcon(icons.icon("upload", self.theme.color("text_muted"), 16))
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
         self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))
+        self.integrations_btn.setIcon(icons.icon("zap", self.theme.color("text_muted"), 18))
         self.settings_btn.setIcon(icons.icon("settings", self.theme.color("text_muted"), 18))
         self.new_folder_btn.setIcon(icons.icon("plus", self.theme.color("text_muted"), 14))
         self._set_folders_chevron_icon()
-        dark = self.theme.mode == "dark"
-        self.theme_btn.setText("  Light mode" if dark else "  Dark mode")
-        self.theme_btn.setIcon(icons.icon("sun" if dark else "moon", self.theme.color("text_muted"), 18))
+        if hasattr(self, "theme_toggle"):
+            self.theme_toggle.apply_theme()
+        if hasattr(self, "account_card"):
+            self.account_card.refresh()
         if hasattr(self, "search_action"):
             self.search_action.setIcon(icons.icon("search", self.theme.color("text_faint"), 16))
 

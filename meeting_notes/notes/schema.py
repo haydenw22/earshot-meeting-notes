@@ -8,19 +8,43 @@ one validated object.
 """
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ActionItem(BaseModel):
     task: str = Field(description="The action, specific and self-contained.")
     owner: Optional[str] = Field(default=None, description="Who owns it, or null if unclear — never invent a name.")
     done: bool = Field(default=False, description="True only if completed/resolved during the meeting itself.")
+    due: Optional[str] = Field(
+        default=None,
+        description="ISO date YYYY-MM-DD if an explicit deadline was stated; null otherwise.",
+    )
     # Not part of the model-facing tool schema: AI-generated items start as
     # SUGGESTIONS (confirmed=False) and only become real to-dos when the user
     # accepts them. Legacy items without the key are treated as confirmed.
     confirmed: bool = Field(default=False)
+
+    @field_validator("due", mode="before")
+    @classmethod
+    def _normalise_due(cls, v):
+        """Tolerant of model/user junk: never raise — bad input just becomes
+        None rather than crashing the notes pipeline. Only a strict
+        YYYY-MM-DD string survives."""
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            _dt.date.fromisoformat(s)
+        except ValueError:
+            return None
+        return s
 
 
 class Section(BaseModel):
@@ -68,6 +92,14 @@ def notes_tool_schema() -> dict:
                         "done": {
                             "type": "boolean",
                             "description": "true ONLY if the item was actually completed/resolved during the meeting; otherwise false.",
+                        },
+                        "due": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "ISO date YYYY-MM-DD, ONLY if an explicit deadline was stated in the "
+                                "meeting ('by Friday', 'end of month'); resolve relative dates using "
+                                "the meeting date; null otherwise — never invent one."
+                            ),
                         },
                     },
                     "required": ["task", "done"],

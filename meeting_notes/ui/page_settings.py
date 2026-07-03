@@ -199,60 +199,8 @@ class SettingsPage(QWidget):
         ovl.addLayout(reset_row)
         lay.addWidget(ov_card)
 
-        wh_card, wcl = self._card(
-            "Webhook",
-            "POST each finished meeting (as JSON) to your own automation — Slack, Notion, "
-            "Zapier, n8n, a CRM, anything. Leave blank to disable. Note: this sends data off "
-            "your machine.",
-        )
-        wform = QFormLayout()
-        wform.setSpacing(10)
-        self.webhook_url = QLineEdit(self.cfg.webhook_url)
-        self.webhook_url.setPlaceholderText("https://…  (blank = off)")
-        self.webhook_when = QComboBox()
-        self.webhook_when.addItem("After the AI summary is done", "summary")
-        self.webhook_when.addItem("After transcription (raw transcript)", "transcript")
-        self.webhook_when.setCurrentIndex(1 if self.cfg.webhook_when == "transcript" else 0)
-        wform.addRow("URL", self.webhook_url)
-        wform.addRow("Send", self.webhook_when)
-        wcl.addLayout(wform)
-        lay.addWidget(wh_card)
-
-        td_card, tdl = self._card(
-            "Todoist",
-            "Send open action items to Todoist from a meeting's page (the \"To Todoist\" button). "
-            "Get your token from Todoist → Settings → Integrations → Developer.",
-        )
-        tdform = QFormLayout()
-        tdform.setSpacing(10)
-        self.todoist_token = QLineEdit(self.cfg.todoist_token)
-        self.todoist_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self.todoist_token.setPlaceholderText("Todoist API token  (blank = off)")
-        tdform.addRow("API token", self.todoist_token)
-        tdl.addLayout(tdform)
-        td_row = QHBoxLayout()
-        self.todoist_test_btn = QPushButton("Test connection")
-        self.todoist_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.todoist_test_btn.clicked.connect(self._test_todoist)
-        self.todoist_test_label = QLabel("")
-        td_row.addWidget(self.todoist_test_btn)
-        td_row.addWidget(self.todoist_test_label)
-        td_row.addStretch(1)
-        tdl.addLayout(td_row)
-        lay.addWidget(td_card)
-
         lay.addStretch(1)
         return w
-
-    def _test_todoist(self) -> None:
-        self.todoist_test_label.setText("Testing…")
-        self.todoist_test_label.repaint()
-        from ..integrations import todoist
-        ok = todoist.ping(self.todoist_token.text().strip())
-        self.todoist_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
-        self.todoist_test_label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
 
     def _on_online_preset(self, *_) -> None:
         data = self.online_preset.currentData()
@@ -787,9 +735,8 @@ class SettingsPage(QWidget):
         ov = getattr(self.shell.record, "overlay", None)
         if ov is not None:
             ov.set_opacity(self.cfg.overlay_opacity)
-        self.cfg.webhook_url = self.webhook_url.text().strip()
-        self.cfg.webhook_when = self.webhook_when.currentData() or "summary"
-        self.cfg.todoist_token = self.todoist_token.text().strip()
+        # webhook_url / webhook_when / todoist_token now live on the Integrations
+        # page (moved in Phase D) — saved by IntegrationsPage._save(), not here.
         self.cfg.custom_instructions_enabled = self.ci_toggle.isChecked()
         self.cfg.custom_instructions = self.ci_text.toPlainText().strip()
         self.cfg.templates = self.templates_mgr.items()
