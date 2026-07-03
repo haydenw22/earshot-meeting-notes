@@ -209,7 +209,12 @@ def _fire_webhook(repo, meeting_id, cfg, progress) -> None:
         return
     try:
         from ..integrations import webhook
-        webhook.send(cfg.webhook_url, webhook.build_payload(repo.get(meeting_id)))
+        m = repo.get(meeting_id)
+        # resolve the meeting's folder so automations can route by client/team
+        folder = None
+        if m.folder_id is not None:
+            folder = next((f for f in repo.list_folders() if f.id == m.folder_id), None)
+        webhook.send(cfg.webhook_url, webhook.build_payload(m, folder=folder))
         progress("Sent to webhook")
     except Exception as e:  # never fail the pipeline because a webhook is down
         progress(f"Webhook failed: {e}")

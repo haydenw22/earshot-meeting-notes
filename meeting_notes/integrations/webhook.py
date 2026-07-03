@@ -11,7 +11,14 @@ from urllib.parse import urlparse
 import httpx
 
 
-def build_payload(m) -> dict:
+def build_payload(m, folder=None) -> dict:
+    """The outbound JSON for one meeting.
+
+    `folder` is the resolved Folder the meeting lives in (or None) — passed in
+    by the caller so this module stays repository-free. The "folder" key lets
+    automations route by client/team; it is null for unfiled meetings, and the
+    rest of the payload is unchanged (backward-compatible).
+    """
     return {
         "id": m.id,
         "title": m.title,
@@ -20,6 +27,10 @@ def build_payload(m) -> dict:
         "attendees": m.attendees,
         "agenda": m.agenda,
         "template": m.template,
+        "folder": (
+            {"id": folder.id, "name": folder.name, "color": folder.color}
+            if folder is not None else None
+        ),
         "duration_secs": m.duration_secs,
         "status": m.status,
         "transcript": m.transcript,

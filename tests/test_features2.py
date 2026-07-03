@@ -149,6 +149,15 @@ def main() -> int:
     check("chrome exe → browser call", "browser" in fn(r"C:#x#chrome.exe"))
     check("unknown exe → capitalised name", fn(r"C:#y#superapp.exe") == "Superapp")
     check("live query returns a list", isinstance(mic_usage.apps_using_microphone(), list))
+    cl = mic_usage.classify
+    check("zoom/teams/webex/slack are meeting apps",
+          all(cl(e) == "meeting" for e in ("zoom.exe", "CptHost.exe", "ms-teams.exe",
+                                           "webexmta.exe", "slack.exe")))
+    check("browsers classified as browser",
+          all(cl(e) == "browser" for e in ("chrome.exe", "msedge.exe", "firefox.exe")))
+    check("games/dictation/anything else never qualify",
+          all(cl(e) == "other" for e in ("headliners-win64-shipping.exe", "discord.exe",
+                                         "cortana.exe", "obs64.exe")))
 
     print("\nFEATURE BATCH 2 TESTS PASSED")
     return 0

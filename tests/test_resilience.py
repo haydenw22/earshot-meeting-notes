@@ -77,6 +77,21 @@ def main() -> int:
     repo.update(m.id, transcript="pricing discussion widget")
     check("search still works despite bad notes_json", m.id in repo.search("widget"))
     check("bad notes_json reads as None", repo.get(m.id).notes is None)
+
+    print("== webhook payload: folder routing ==")
+    acme = repo.create_folder("Acme Corp", "#EF4444")
+    filed = repo.create(date_text="d", date_iso="2026-01-02", attendees=[], folder_id=acme.id)
+    repo.update(filed.id, title="Filed meeting", transcript="t")
+    folder = next((f for f in repo.list_folders() if f.id == repo.get(filed.id).folder_id), None)
+    p = webhook.build_payload(repo.get(filed.id), folder=folder)
+    check("payload carries the folder for routing",
+          p["folder"] == {"id": acme.id, "name": "Acme Corp", "color": "#EF4444"})
+    check("unfiled meeting → folder is null",
+          webhook.build_payload(repo.get(m.id), folder=None)["folder"] is None)
+    legacy = webhook.build_payload(repo.get(m.id))  # old single-arg call still works
+    check("backward-compatible: folder key present, other keys unchanged",
+          legacy["folder"] is None and legacy["id"] == m.id and "transcript" in legacy
+          and "notes" in legacy and "bookmarks" in legacy)
     repo.close()
 
     print("== webhook guards ==")

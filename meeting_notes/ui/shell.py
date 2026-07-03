@@ -455,13 +455,13 @@ class Shell(QMainWindow):
 
         try:
             root = recordings_dir()
-        except OSError:
-            return
-        jobs = []
-        for m in self.repo.list():
-            folder = Path(m.audio_dir) if m.audio_dir else (root / f"meeting_{m.id:06d}")
-            if (folder / wr.SIDECAR).exists():
-                jobs.append((m.id, folder))
+            jobs = []
+            for m in self.repo.list():
+                folder = Path(m.audio_dir) if m.audio_dir else (root / f"meeting_{m.id:06d}")
+                if (folder / wr.SIDECAR).exists():
+                    jobs.append((m.id, folder))
+        except Exception:
+            return  # salvage is best-effort — never crash startup over it
         if not jobs:
             return
         repo = self.repo

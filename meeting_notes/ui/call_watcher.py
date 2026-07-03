@@ -19,10 +19,21 @@ _POLL_MS = 4000
 _TOAST_TIMEOUT_MS = 30_000
 _MARGIN = 24
 
+# How many consecutive polls a signal must persist before we believe it.
+# Known meeting apps (Zoom/Teams/Webex/Slack) are a strong signal → quick.
+# A browser using the mic could be a Meet tab — or a game, a voice note,
+# anything — so it must be SUSTAINED before we dare interrupt.
+_MEETING_TICKS = 2   # ~8 s
+_BROWSER_TICKS = 6   # ~24 s
+_END_TICKS = 2       # ~8 s of silence before we call it ended
+
 
 class CallWatcher(QObject):
-    """Emits call_started(apps) on the idle→active mic edge and call_ended()
-    on active→idle. Snoozable so a dismissed prompt stays dismissed for that call."""
+    """Emits call_started(apps) when a known meeting app (or, much more
+    conservatively, a browser) has been using the mic for long enough, and
+    call_ended() when that stops. Unknown apps — games, dictation, assistants —
+    never trigger anything. Snoozable so a dismissed prompt stays dismissed for
+    that call."""
 
     call_started = Signal(list)
     call_ended = Signal()
@@ -31,6 +42,8 @@ class CallWatcher(QObject):
         super().__init__(parent)
         self._active = False
         self._snoozed = False
+        self._streak = 0       # consecutive polls with a qualifying app
+        self._quiet = 0        # consecutive polls without one (for end detection)
         self._timer = QTimer(self)
         self._timer.setInterval(_POLL_MS)
         self._timer.timeout.connect(self._tick)
@@ -45,16 +58,32 @@ class CallWatcher(QObject):
         self._snoozed = True
 
     def _tick(self) -> None:
-        apps = mic_usage.apps_using_microphone()
-        active = bool(apps)
-        if active and not self._active:
-            self._active = True
-            if not self._snoozed:
-                self.call_started.emit(apps)
-        elif not active and self._active:
-            self._active = False
-            self._snoozed = False  # next call may prompt again
-            self.call_ended.emit()
+        classified = mic_usage.apps_using_microphone_classified()
+        meeting = [name for name, cat in classified if cat == "meeting"]
+        browser = [name for name, cat in classified if cat == "browser"]
+        self._evaluate(meeting, browser)
+
+    def _evaluate(self, meeting: list, browser: list) -> None:
+        """Edge logic, separated from polling so it's directly testable."""
+        qualifying = meeting or browser
+        if qualifying:
+            self._streak += 1
+            self._quiet = 0
+            # meeting apps confirm fast; browser-only signals need sustained use
+            need = _MEETING_TICKS if meeting else _BROWSER_TICKS
+            if not self._active and self._streak >= need:
+                self._active = True
+                if not self._snoozed:
+                    self.call_started.emit(meeting or browser)
+        else:
+            self._streak = 0
+            if self._active:
+                self._quiet += 1
+                if self._quiet >= _END_TICKS:
+                    self._active = False
+                    self._snoozed = False  # next call may prompt again
+                    self._quiet = 0
+                    self.call_ended.emit()
 
 
 class CallToast(QWidget):

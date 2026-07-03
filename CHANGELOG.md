@@ -4,6 +4,23 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] — 2026-07-03 · Calmer call detection & menu polish
+
+### Changed
+
+- Call detection no longer prompts for games, dictation tools or anything else that merely uses the microphone. Only known meeting apps trigger it (Zoom, Teams, Webex, Slack — after ~8 s), and browsers (a possible Google Meet tab) only after ~24 s of sustained mic use, so a quick voice note never interrupts you.
+- All dropdown menus, combo lists and multi-select pickers got a visual overhaul: rounded corners, sidebar-style rounded hover pills, aligned icon columns, and clean checkbox styling. "Move to folder" now marks the current folder with a check in the folder's colour.
+
+### Fixed
+
+- The More button no longer shows two dropdown arrows.
+
+## [0.19.0] — 2026-07-03 · Webhook folder routing
+
+### Added
+
+- The webhook payload now includes the meeting's folder (id, name and colour; null when unfiled), so Zapier/n8n/Make automations can route meetings by client or team. Existing payload fields are unchanged.
+
 ## [0.18.0] — 2026-07-03 · Folders & fit-and-finish
 
 ### Added

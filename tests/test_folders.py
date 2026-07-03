@@ -283,15 +283,15 @@ def main() -> int:
     check("move_menu contains the Ops folder", "Ops" in move_texts)
     check("move_menu contains 'New folder…'", "New folder…" in move_texts)
 
-    no_folder_act = page.move_menu.actions()[0]
-    check("'No folder' starts checked (meeting is unfiled)", no_folder_act.isChecked())
+    # current location is marked with a check ICON (checkable indicators render
+    # awkwardly next to icons in QMenu, so the design uses icons only)
+    check("no move_menu row is checkable", all(not a.isCheckable() for a in page.move_menu.actions()))
+    check("every row carries an icon (aligned column)",
+          all(not a.icon().isNull() for a in page.move_menu.actions() if a.text()))
 
     page._move_to_folder(df.id)
     check("triggering the folder action updates folder_id", det_repo.get(dm.id).folder_id == df.id)
     check("shell was notified so the sidebar refreshes", getattr(detail_shell, "notified", False))
-
-    ops_act = [a for a in page.move_menu.actions() if a.text() == "Ops"][0]
-    check("the Ops action is now checked after refresh", ops_act.isChecked())
 
     page._move_to_folder(None)
     check("moving back to 'No folder' unfiles the meeting", det_repo.get(dm.id).folder_id is None)

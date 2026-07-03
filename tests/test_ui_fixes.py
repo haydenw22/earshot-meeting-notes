@@ -214,6 +214,55 @@ def main() -> int:
     check("clear-all: meeting B has no action items left",
           (dash_repo.get(db_.id).notes.get("action_items") or []) == [])
 
+    print("== call watcher: only meeting apps (fast) / browsers (sustained) prompt ==")
+    from meeting_notes.ui import call_watcher as cw
+
+    def fresh_watcher():
+        w = cw.CallWatcher()
+        events = {"started": [], "ended": 0}
+        w.call_started.connect(lambda apps: events["started"].append(list(apps)))
+        w.call_ended.connect(lambda: events.__setitem__("ended", events["ended"] + 1))
+        return w, events
+
+    # a game/unknown app NEVER prompts, no matter how long
+    w, ev = fresh_watcher()
+    for _ in range(30):
+        w._evaluate([], [])          # classified 'other' apps never reach _evaluate lists
+    check("unknown apps never prompt", ev["started"] == [] and ev["ended"] == 0)
+
+    # a meeting app prompts after the short confirmation window
+    w, ev = fresh_watcher()
+    w._evaluate(["Zoom"], [])
+    check("meeting app: no prompt on first sighting", ev["started"] == [])
+    w._evaluate(["Zoom"], [])
+    check("meeting app prompts after ~8s", ev["started"] == [["Zoom"]])
+    w._evaluate(["Zoom"], [])
+    check("no re-prompt while the call continues", len(ev["started"]) == 1)
+    w._evaluate([], [])
+    w._evaluate([], [])
+    check("call end fires after sustained silence", ev["ended"] == 1)
+
+    # a browser needs SUSTAINED mic use (a quick voice note must not prompt)
+    w, ev = fresh_watcher()
+    for _ in range(3):
+        w._evaluate([], ["Chrome (browser call)"])
+    w._evaluate([], [])  # stopped before the browser threshold
+    check("short browser mic use never prompts", ev["started"] == [])
+    w, ev = fresh_watcher()
+    for _ in range(cw._BROWSER_TICKS):
+        w._evaluate([], ["Chrome (browser call)"])
+    check("sustained browser use eventually prompts", ev["started"] == [["Chrome (browser call)"]])
+
+    # dismissing snoozes for the rest of that call, next call prompts again
+    w, ev = fresh_watcher()
+    w.snooze_until_idle()
+    for _ in range(5):
+        w._evaluate(["Zoom"], [])
+    check("snoozed call never prompts", ev["started"] == [])
+    w._evaluate([], []); w._evaluate([], [])   # call ends → snooze clears
+    w._evaluate(["Zoom"], []); w._evaluate(["Zoom"], [])
+    check("next call prompts again after snooze", ev["started"] == [["Zoom"]])
+
     dash_repo.close()
     repo.close()
     print("\nUI FIXES TESTS PASSED")

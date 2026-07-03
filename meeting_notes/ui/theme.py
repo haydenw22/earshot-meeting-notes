@@ -330,18 +330,61 @@ QToolTip {{
 }}
 
 /* ---------- menus (e.g. detail page "More") ---------- */
+/* ---------- menus & dropdown lists (rounded, sidebar-like pills) ---------- */
 QMenu {{
     background-color: {t['surface']};
     border: 1px solid {t['border']};
-    border-radius: 10px;
-    padding: 4px;
+    border-radius: 12px;
+    padding: 6px;
 }}
 QMenu::item {{
-    padding: 6px 14px;
-    border-radius: 8px;
+    background: transparent;
+    padding: 8px 26px 8px 12px;
+    margin: 2px 4px;
+    border-radius: 9px;
     color: {t['text']};
+    font-weight: 600;
 }}
-QMenu::item:selected {{ background-color: {t['primary_soft']}; color: {t['text']}; }}
-QMenu::item:disabled {{ color: {t['text_faint']}; }}
-QMenu::separator {{ height: 1px; background: {t['border']}; margin: 4px 8px; }}
+QMenu::item:selected {{ background-color: {t['primary_soft']}; color: {t['primary']}; }}
+QMenu::item:disabled {{ color: {t['text_faint']}; background: transparent; }}
+QMenu::separator {{ height: 1px; background: {t['border']}; margin: 6px 12px; }}
+QMenu::icon {{ margin-left: 8px; }}
+/* checkable menu items (e.g. the current folder) — match the app's checkboxes
+   and keep the box vertically centred in the pill */
+QMenu::indicator {{
+    width: 16px; height: 16px;
+    margin-left: 8px;
+    border: 1px solid {t['border_strong']};
+    border-radius: 5px;
+    background: {t['surface']};
+}}
+QMenu::indicator:checked {{ background: {t['primary']}; border-color: {t['primary']}; {check_rule} }}
+QMenu::right-arrow {{ margin-right: 10px; }}
+
+/* combo dropdown lists get the same rounded-pill rows */
+QComboBox QAbstractItemView::item {{
+    padding: 7px 10px;
+    margin: 2px 4px;
+    border-radius: 8px;
+    min-height: 22px;
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {t['primary_soft']};
+    color: {t['primary']};
+}}
+
+/* multi-select lists (e.g. the brief meeting picker) — same checkbox look */
+QListView::indicator, QTreeView::indicator {{
+    width: 16px; height: 16px;
+    border: 1px solid {t['border_strong']};
+    border-radius: 5px;
+    background: {t['surface']};
+}}
+QListView::indicator:checked, QTreeView::indicator:checked {{
+    background: {t['primary']}; border-color: {t['primary']}; {check_rule}
+}}
+
+/* buttons that open a QMenu: our themed chevron icon is the indicator — kill
+   Qt's built-in second arrow */
+QPushButton::menu-indicator {{ image: none; width: 0px; }}
 """

@@ -247,35 +247,32 @@ class DetailPage(QWidget):
 
     # ---------- move to folder ----------
     def _populate_move_menu(self, m) -> None:
+        """One aligned icon column: a folder glyph in the folder's colour, and a
+        check mark (in that colour) marking where the meeting currently lives —
+        no checkbox indicators, which Qt renders awkwardly next to icons."""
+        from . import icons
+
         self.move_menu.clear()
-        no_folder_act = self.move_menu.addAction("No folder")
-        no_folder_act.setCheckable(True)
-        no_folder_act.setChecked(m.folder_id is None)
-        no_folder_act.triggered.connect(lambda _=False: self._move_to_folder(None))
+
+        def add(name, color, text, slot):
+            act = self.move_menu.addAction(icons.icon(name, color, 15), text)
+            act.triggered.connect(slot)
+            return act
+
+        here = m.folder_id is None
+        add("check" if here else "folder", self.theme.color("text_faint"),
+            "No folder", lambda _=False: self._move_to_folder(None))
 
         folders = self.repo.list_folders()
         if folders:
             self.move_menu.addSeparator()
             for f in folders:
-                act = self.move_menu.addAction(self._folder_icon(f.color), f.name)
-                act.setCheckable(True)
-                act.setChecked(m.folder_id == f.id)
-                act.triggered.connect(lambda _=False, fid=f.id: self._move_to_folder(fid))
+                here = m.folder_id == f.id
+                add("check" if here else "folder", f.color, f.name,
+                    lambda _=False, fid=f.id: self._move_to_folder(fid))
 
         self.move_menu.addSeparator()
-        new_act = self.move_menu.addAction("New folder…")
-        new_act.triggered.connect(self._move_to_new_folder)
-
-    def _folder_icon(self, hexcolor: str):
-        from PySide6.QtGui import QColor, QIcon, QPainter
-        pm = QPixmap(14, 14)
-        pm.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pm)
-        painter.setBrush(QColor(hexcolor))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(0, 0, 14, 14, 3, 3)
-        painter.end()
-        return QIcon(pm)
+        add("plus", self.theme.color("text_muted"), "New folder…", self._move_to_new_folder)
 
     def _move_to_folder(self, folder_id) -> None:
         if self.meeting_id is None:
