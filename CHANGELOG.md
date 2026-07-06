@@ -4,6 +4,18 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] — 2026-07-07 · Recording indicator & sidebar polish
+
+### Added
+
+- The sidebar button becomes a live recording indicator while you record: it reads "Recording" and the record dot pulses until you stop.
+- Earshot Plus beta subscriptions show a proper "Beta" badge on the Account page.
+
+### Changed
+
+- Project rows in the sidebar now use exactly the same rounded hover pills as the meeting list below them.
+- Removed the duplicate "New recording" button from the home page header — the sidebar button and the big record card already cover it.
+
 ## [0.25.1] — 2026-07-06 · Scroll-safe settings
 
 ### Fixed

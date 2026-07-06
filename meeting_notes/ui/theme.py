@@ -311,8 +311,8 @@ QTreeWidget#SidebarTree {{ background: transparent; border: none; outline: none;
 QTreeWidget#SidebarTree::item {{
     color: {t['text']};
     border-radius: 10px;
-    padding: 6px 8px;
-    margin: 1px 0;
+    padding: 9px 10px;   /* match the MEETING NOTES list rows exactly */
+    margin: 2px 0;
     border-left: 3px solid transparent;
 }}
 QTreeWidget#SidebarTree::item:hover {{ background-color: {t['surface_hover']}; }}

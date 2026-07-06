@@ -638,6 +638,8 @@ class RecordPage(QWidget):
         self.headphones.setEnabled(False)
         self.live.setVisible(True)
         self.status_label.setText("Recording… attendees stay editable.")
+        if hasattr(self.shell, "set_recording"):
+            self.shell.set_recording(True)
         self.shell.notify_data_changed()
         self.poll.start()
         self._show_overlay()
@@ -710,6 +712,8 @@ class RecordPage(QWidget):
         self.poll.stop()
         self._stop_screen()
         self._hide_overlay()
+        if hasattr(self.shell, "set_recording"):
+            self.shell.set_recording(False)
         self.input_warning.setVisible(False)
         self.record_btn.setEnabled(False)
         self.record_btn.setText("Processing…")

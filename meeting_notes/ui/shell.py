@@ -142,12 +142,12 @@ class _TreeWrapDelegate(QStyledItemDelegate):
             parent = parent.parent()
         avail = (view.viewport().width() - view.indentation() * depth
                  - 16 - 6    # icon + icon/text gap
-                 - 22)       # QSS item padding + left accent border
+                 - 26)       # QSS item padding (10+10) + left accent border + fudge
         if avail <= 40:
             return base
         rect = option.fontMetrics.boundingRect(
             0, 0, avail, 100000, Qt.TextFlag.TextWordWrap, index.data() or "")
-        return QSize(base.width(), max(base.height(), rect.height() + 14))
+        return QSize(base.width(), max(base.height(), rect.height() + 20))
 
 
 class _FolderTree(QTreeWidget):
@@ -518,6 +518,11 @@ class Shell(QMainWindow):
         self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_btn.clicked.connect(self.show_record)
         lay.addWidget(self.new_btn)
+        # live-recording state for the CTA (see set_recording)
+        self._rec_pulse = QTimer(self)
+        self._rec_pulse.setInterval(600)
+        self._rec_pulse.timeout.connect(self._pulse_record_icon)
+        self._pulse_on = True
 
         # import an existing recording
         self.import_btn = QPushButton("  Import file")
@@ -1148,11 +1153,29 @@ class Shell(QMainWindow):
         if self.detail.meeting_id is not None:
             self.detail.refresh()
 
+    def set_recording(self, active: bool) -> None:
+        """Reflect a live recording in the sidebar CTA: the label flips to
+        'Recording' and the record dot pulses until the recording stops."""
+        if active:
+            self.new_btn.setText("  Recording")
+            self._pulse_on = True
+            self._rec_pulse.start()
+        else:
+            self._rec_pulse.stop()
+            self.new_btn.setText("  New recording")
+            self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
+
+    def _pulse_record_icon(self) -> None:
+        self._pulse_on = not self._pulse_on
+        color = self.theme.color("on_danger") if self._pulse_on else self.theme.color("danger_press")
+        self.new_btn.setIcon(icons.icon("record", color, 16))
+
     def _refresh_sidebar_icons(self) -> None:
         # brand mark (the indigo tile is part of the SVG, so no QSS background)
         self.logo.setPixmap(logo.logo_pixmap(34))
         self.logo.setStyleSheet("")
-        self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
+        if not self._rec_pulse.isActive():
+            self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
         self.import_btn.setIcon(icons.icon("upload", self.theme.color("text_muted"), 16))
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
         self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))

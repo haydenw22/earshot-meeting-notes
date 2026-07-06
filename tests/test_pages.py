@@ -103,6 +103,22 @@ def main() -> int:
     app.processEvents()
     check("home not hidden again after navigating back", not shell.home.isHidden())
     check("account page hidden after navigating away", shell.account.isHidden())
+
+    # ---------------------------------------------------------------
+    print("== sidebar CTA reflects a live recording ==")
+    check("CTA starts as 'New recording'", shell.new_btn.text().strip() == "New recording")
+    check("pulse timer idle before recording", not shell._rec_pulse.isActive())
+    shell.set_recording(True)
+    check("CTA reads 'Recording' while live", shell.new_btn.text().strip() == "Recording")
+    check("record-dot pulse timer running", shell._rec_pulse.isActive())
+    shell._pulse_record_icon()  # a tick must not raise and keeps an icon set
+    check("icon present mid-pulse", not shell.new_btn.icon().isNull())
+    shell.set_recording(False)
+    check("CTA restores after stop", shell.new_btn.text().strip() == "New recording")
+    check("pulse timer stopped after stop", not shell._rec_pulse.isActive())
+
+    print("== home header: no separate top-right record button ==")
+    check("home page has no header record button", not hasattr(shell.home, "new_btn"))
     repo.close()
 
     # ---------------------------------------------------------------

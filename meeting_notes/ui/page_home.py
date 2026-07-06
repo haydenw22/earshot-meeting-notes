@@ -334,12 +334,8 @@ class HomePage(QWidget):
         titles.addWidget(self.count)
         header.addLayout(titles)
         header.addStretch(1)
-        self.new_btn = QPushButton("  New recording")
-        self.new_btn.setProperty("variant", "primary")
-        self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.new_btn.setMinimumHeight(42)
-        self.new_btn.clicked.connect(lambda: self.shell.show_record())
-        header.addWidget(self.new_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        # (no top-right "New recording" button — the sidebar CTA and the hero
+        # card already cover starting a recording)
         root.addLayout(header)
 
         self.scroll = QScrollArea()
@@ -941,7 +937,6 @@ class HomePage(QWidget):
         self._apply_rail_visibility()
 
     def apply_theme(self) -> None:
-        self.new_btn.setIcon(self.theme.icon("record", "on_primary", 16))
         self.empty_icon.setPixmap(icons.pixmap("mic", self.theme.color("text_faint"), 56))
         backdrop = getattr(self, "_hero_backdrop", None)
         if backdrop is not None:

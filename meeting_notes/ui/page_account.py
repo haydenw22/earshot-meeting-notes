@@ -40,6 +40,7 @@ PLUS_PITCH = [
 _STATUS_CHIP = {
     "active": ("Active", "success", "success_soft"),
     "trialing": ("Trial", "primary", "primary_soft"),
+    "beta": ("Beta", "primary", "primary_soft"),
     "past_due": ("Past due", "warning", "warning_soft"),
     "canceled": ("Canceled", "danger", "danger_soft"),
     "none": ("No subscription", "text_muted", "surface_hover"),
