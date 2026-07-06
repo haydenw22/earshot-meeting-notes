@@ -21,6 +21,8 @@ def _local_fields(cfg: Config) -> tuple[str, str, str]:
 
 def ready(cfg: Config) -> bool:
     """Can we generate notes at all with the current settings?"""
+    if cfg.account_mode == "cloud":
+        return bool(cfg.cloud_token)
     if cfg.notes_provider == "openai":
         base, key, model = _llm_fields(cfg)
         return bool((base or "").strip() and (key or "").strip() and (model or "").strip())
@@ -31,6 +33,8 @@ def ready(cfg: Config) -> bool:
 
 
 def missing_hint(cfg: Config) -> str:
+    if cfg.account_mode == "cloud":
+        return "Sign in to Earshot Plus (Account page)."
     if cfg.notes_provider == "openai":
         return "Add your OpenAI (or compatible cloud) details in Settings → AI."
     if cfg.notes_provider == "local":
@@ -47,7 +51,18 @@ def generate_notes(
     human_date: str = "",
     extra_instructions: str = "",
 ) -> MeetingNotes:
-    if cfg.notes_provider in ("openai", "local"):
+    if cfg.account_mode == "cloud":
+        from . import earshot_llm
+        notes = earshot_llm.generate_notes(
+            transcript,
+            base_url=cfg.cloud_api_base,
+            token=cfg.cloud_token,
+            attendees=attendees,
+            agenda=agenda,
+            human_date=human_date,
+            extra_instructions=extra_instructions,
+        )
+    elif cfg.notes_provider in ("openai", "local"):
         from . import openai_llm
         base, key, model = _llm_fields(cfg) if cfg.notes_provider == "openai" else _local_fields(cfg)
         notes = openai_llm.generate_notes(
@@ -86,6 +101,16 @@ def run_action(
     notes_text: str = "",
     title: str = "",
 ) -> str:
+    if cfg.account_mode == "cloud":
+        from . import earshot_llm
+        return earshot_llm.run_action(
+            instruction,
+            base_url=cfg.cloud_api_base,
+            token=cfg.cloud_token,
+            transcript=transcript,
+            notes_text=notes_text,
+            title=title,
+        )
     if cfg.notes_provider in ("openai", "local"):
         from . import openai_llm
         base, key, model = _llm_fields(cfg) if cfg.notes_provider == "openai" else _local_fields(cfg)

@@ -169,10 +169,73 @@ def answer(question: str, *, meetings: list, cfg: Config, today: str = "") -> An
     if not done:
         return Answer("You don't have any completed meetings to search yet.", scope="none")
 
+    if cfg.account_mode == "cloud":
+        return _answer_earshot(question, done=done, cfg=cfg, today=today)
     if cfg.notes_provider == "anthropic":
         return _answer_anthropic(question, done=done, api_key=cfg.resolved_anthropic_key(),
                                   model=cfg.anthropic_model, today=today)
     return _answer_openai_compatible(question, done=done, cfg=cfg, today=today)
+
+
+# ------------------------------------------------------- Earshot Plus (cloud) --
+def _strip_html(s: str) -> str:
+    """Very small tag stripper: the app renders answers as PLAIN text (untrusted
+    model output is never shown as rich text), so collapse answer_html to text."""
+    import re
+
+    text = re.sub(r"<br\s*/?>", "\n", s or "", flags=re.IGNORECASE)
+    text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    import html as _html
+
+    return _html.unescape(text).strip()
+
+
+def _verified_cloud_citations(raw_citations, used: list) -> list[dict]:
+    """The cloud /v1/ask contract returns citations as {meeting_title, quote} —
+    no meeting_id. Verify each quote genuinely appears in one of the meetings we
+    actually sent (case-insensitive), mapping title→meeting, so timestamps/quotes
+    still can't be hallucinated (same discipline as the anthropic path)."""
+    by_title = {(m.title or "Untitled").lower(): m for m in used}
+    citations = []
+    for c in raw_citations or []:
+        if not isinstance(c, dict):
+            continue
+        quote = (c.get("quote") or "").strip()
+        title = (c.get("meeting_title") or "").strip()
+        m = by_title.get(title.lower())
+        if m is None:
+            # fall back to matching the quote against any sent meeting's transcript
+            m = next((mm for mm in used if quote and mm.transcript
+                      and quote.lower() in mm.transcript.lower()), None)
+        if m is None:
+            continue
+        if quote and m.transcript and quote.lower() not in m.transcript.lower():
+            continue
+        citations.append({
+            "meeting_id": m.id,
+            "title": m.title or "Untitled",
+            "date_text": m.date_text,
+            "timestamp": "",
+            "quote": quote,
+        })
+    return citations
+
+
+def _answer_earshot(question: str, *, done: list, cfg: Config, today: str) -> Answer:
+    from ..notes import earshot_llm
+
+    # Same selection heuristic + context-block builder as the local path (the
+    # cloud proxy doesn't do meeting selection — the client sends the blocks).
+    selected = done[:MAX_SELECTED]
+    blocks, used = _build_context(selected)
+    data = earshot_llm.ask(
+        question, base_url=cfg.cloud_api_base, token=cfg.cloud_token,
+        context_blocks=blocks, today=today,
+    )
+    text = _strip_html(data.get("answer_html") or "") or "I couldn't find an answer in those meetings."
+    citations = _verified_cloud_citations(data.get("citations"), used)
+    return Answer(text, citations=citations, scope=_scope_line(used, len(done)))
 
 
 # ---------------------------------------------------------------- Anthropic --

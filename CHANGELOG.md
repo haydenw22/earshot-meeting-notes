@@ -4,6 +4,17 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] — 2026-07-06 · Setup guide & Earshot Plus groundwork
+
+### Added
+
+- A first-run setup guide: a quick tour of what Earshot does, then a choice — self-host free forever with your own keys (guided setup with connection tests), or sign in to Earshot Plus. Re-run it anytime from Settings → General.
+- Earshot Plus groundwork: sign in by opening tryearshot.app and entering a short code — no passwords typed into the app. In Plus mode transcription and AI run through the managed service (no keys needed), the Transcription and AI settings tabs step aside, and the Account page shows your plan, renewal date and a live usage meter with manage-billing and sign-out.
+
+### Notes
+
+- Earshot Plus servers aren't live yet — the app says so politely if you try. Self-hosting stays exactly as it was, free forever.
+
 ## [0.23.1] — 2026-07-06 · Header icon alignment
 
 ### Fixed

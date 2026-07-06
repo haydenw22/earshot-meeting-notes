@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="earshot_test_")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from meeting_notes.config import Config  # noqa: E402
 from meeting_notes.storage import db as dbmod  # noqa: E402
@@ -199,24 +199,30 @@ def main() -> int:
     acc_repo.close()
 
     # ---------------------------------------------------------------
-    print("== account: Sign-in button exists, wired to a no-network handler ==")
+    # The old "Earshot Cloud — coming soon" mock is replaced by the real Earshot
+    # Plus flow (spec Phase 1). In selfhost mode the Account page pitches Plus with
+    # a "Sign in / Subscribe" button (opens the device-link dialog) and a "Learn
+    # more" button (opens tryearshot.app). Assert the new behaviour directly —
+    # stronger than the old "shows a coming-soon box" check.
+    print("== account: selfhost shows the Earshot Plus pitch (subscribe + learn more) ==")
     signin_repo = new_repo()
-    spage2 = AccountPage(_Shell(), signin_repo, Config(), theme)
+    scfg2 = Config()
+    scfg2.account_mode = "selfhost"
+    spage2 = AccountPage(_Shell(), signin_repo, scfg2, theme)
     app.processEvents()
-    check("signin_btn exists", hasattr(spage2, "signin_btn"))
+    check("subscribe_btn exists (Sign in / Subscribe)", hasattr(spage2, "subscribe_btn"))
+    check("learn_btn exists (Learn more)", hasattr(spage2, "learn_btn"))
+    check("no old coming-soon signin_btn remains", not hasattr(spage2, "signin_btn"))
 
-    captured = []
-    orig_information = QMessageBox.information
-    QMessageBox.information = staticmethod(lambda *a, **k: captured.append((a, k)))
+    import meeting_notes.ui.page_account as pa_mod
+    opened = []
+    orig_open = pa_mod.webbrowser.open
+    pa_mod.webbrowser.open = lambda url, *a, **k: opened.append(url)
     try:
-        spage2._on_sign_in()
+        spage2.learn_btn.click()
     finally:
-        QMessageBox.information = orig_information
-    check("Sign-in shows exactly one QMessageBox.information call", len(captured) == 1)
-    shown_args = captured[0][0]
-    check("Sign-in dialog title is 'Coming soon'", shown_args[1] == "Coming soon")
-    check("Sign-in dialog body mentions Earshot stays local",
-          "fully local" in shown_args[2])
+        pa_mod.webbrowser.open = orig_open
+    check("Learn more opens tryearshot.app", opened == ["https://tryearshot.app"])
     signin_repo.close()
 
     print("\nPAGES TESTS PASSED")

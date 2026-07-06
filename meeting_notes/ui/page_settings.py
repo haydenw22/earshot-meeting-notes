@@ -63,11 +63,7 @@ class SettingsPage(QWidget):
         root.addWidget(head)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._general_tab(), "General")
-        self.tabs.addTab(self._audio_tab(), "Audio")
-        self.tabs.addTab(self._transcription_tab(), "Transcription")
-        self.tabs.addTab(self._ai_tab(), "AI")
-        self.tabs.addTab(self._about_tab(), "About")
+        self._build_tabs()
         root.addWidget(self.tabs, 1)
 
         bar = QHBoxLayout()
@@ -78,6 +74,25 @@ class SettingsPage(QWidget):
         self.save_btn.clicked.connect(self._save)
         bar.addWidget(self.save_btn)
         root.addLayout(bar)
+        self.apply_theme()
+
+    def _build_tabs(self) -> None:
+        """(Re)build the tab set for the current account mode. In cloud mode the
+        Transcription and AI tabs are hidden — Earshot Plus manages both, so
+        there's nothing to configure — leaving General / Audio / About."""
+        self.tabs.clear()
+        self._cloud_mode = self.cfg.account_mode == "cloud"
+        self.tabs.addTab(self._general_tab(), "General")
+        self.tabs.addTab(self._audio_tab(), "Audio")
+        if not self._cloud_mode:
+            self.tabs.addTab(self._transcription_tab(), "Transcription")
+            self.tabs.addTab(self._ai_tab(), "AI")
+        self.tabs.addTab(self._about_tab(), "About")
+
+    def refresh_tabs(self) -> None:
+        """Rebuild the tabs after the account mode changes (sign in / out), so the
+        Transcription and AI tabs appear or disappear immediately."""
+        self._build_tabs()
         self.apply_theme()
 
     def _card(self, title: str, subtitle: str = "") -> tuple[Card, QVBoxLayout]:
@@ -199,8 +214,23 @@ class SettingsPage(QWidget):
         ovl.addLayout(reset_row)
         lay.addWidget(ov_card)
 
+        guide_card, gcl = self._card(
+            "Setup guide",
+            "Walk through choosing self-host or Earshot Plus and setting up transcription and AI "
+            "again — your current settings are prefilled and never overwritten unless you change them.",
+        )
+        self.run_guide_btn = QPushButton("Run setup guide again")
+        self.run_guide_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.run_guide_btn.clicked.connect(self._run_setup_guide)
+        gcl.addWidget(self.run_guide_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(guide_card)
+
         lay.addStretch(1)
         return w
+
+    def _run_setup_guide(self) -> None:
+        if hasattr(self.shell, "run_onboarding"):
+            self.shell.run_onboarding()
 
     def _on_online_preset(self, *_) -> None:
         data = self.online_preset.currentData()
@@ -699,31 +729,39 @@ class SettingsPage(QWidget):
 
     # ---------- save ----------
     def _save(self) -> None:
-        self.cfg.transcription_provider = self._provider()
-        self.cfg.whisper_language = self.language.text().strip()
-        self.cfg.whisper_url = self.whisper_url.text().strip()
-        self.cfg.whisper_vad_filter = self.whisper_vad.isChecked()
-        self.cfg.upload_codec = self.upload_codec.currentData() or "flac"
-        self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
-        self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
-        self.cfg.online_api_key = self.online_key.text().strip()
-        self.cfg.deepgram_api_key = self.deepgram_key.text().strip()
-        self.cfg.deepgram_model = self.deepgram_model.text().strip() or "nova-2"
-        self.cfg.anthropic_api_key = self.api_key.text().strip()
-        self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
-        self.cfg.notes_provider = self.notes_provider_combo.currentData() or "anthropic"
-        # Persist ALL three provider cards regardless of which is currently visible —
-        # this is what makes switching providers lossless (keys/URLs for the other two
-        # are kept, not wiped, when you switch away and back).
-        self.cfg.llm_base_url = self.llm_base_url.text().strip()
-        self.cfg.llm_model = self.llm_model.text().strip()
-        self.cfg.llm_api_key = self.llm_key.text().strip()
-        self.cfg.local_llm_base_url = self.local_base_url.text().strip()
-        self.cfg.local_llm_model = self.local_model.text().strip()
-        self.cfg.local_llm_api_key = self.local_key.text().strip()
-        self.cfg.brief_mode = self.brief_mode_combo.currentData() or "basic"
-        self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
-        self.cfg.auto_summary = self.auto_summary.isChecked()
+        # In cloud mode the Transcription + AI tabs aren't built, so their widgets
+        # don't exist — skip persisting them (Earshot Plus manages both). The
+        # underlying cfg keys are left untouched so signing out restores them.
+        if not getattr(self, "_cloud_mode", False):
+            self.cfg.transcription_provider = self._provider()
+            self.cfg.whisper_language = self.language.text().strip()
+            self.cfg.whisper_url = self.whisper_url.text().strip()
+            self.cfg.whisper_vad_filter = self.whisper_vad.isChecked()
+            self.cfg.upload_codec = self.upload_codec.currentData() or "flac"
+            self.cfg.online_base_url = self.online_base_url.text().strip() or self.cfg.online_base_url
+            self.cfg.online_model = self.online_model.text().strip() or "whisper-1"
+            self.cfg.online_api_key = self.online_key.text().strip()
+            self.cfg.deepgram_api_key = self.deepgram_key.text().strip()
+            self.cfg.deepgram_model = self.deepgram_model.text().strip() or "nova-2"
+            self.cfg.anthropic_api_key = self.api_key.text().strip()
+            self.cfg.anthropic_model = self.model.text().strip() or "claude-sonnet-4-6"
+            self.cfg.notes_provider = self.notes_provider_combo.currentData() or "anthropic"
+            # Persist ALL three provider cards regardless of which is currently visible —
+            # this is what makes switching providers lossless (keys/URLs for the other two
+            # are kept, not wiped, when you switch away and back).
+            self.cfg.llm_base_url = self.llm_base_url.text().strip()
+            self.cfg.llm_model = self.llm_model.text().strip()
+            self.cfg.llm_api_key = self.llm_key.text().strip()
+            self.cfg.local_llm_base_url = self.local_base_url.text().strip()
+            self.cfg.local_llm_model = self.local_model.text().strip()
+            self.cfg.local_llm_api_key = self.local_key.text().strip()
+            self.cfg.brief_mode = self.brief_mode_combo.currentData() or "basic"
+            self.cfg.auto_transcribe = self.auto_transcribe.isChecked()
+            self.cfg.auto_summary = self.auto_summary.isChecked()
+            self.cfg.custom_instructions_enabled = self.ci_toggle.isChecked()
+            self.cfg.custom_instructions = self.ci_text.toPlainText().strip()
+            self.cfg.templates = self.templates_mgr.items()
+            self.cfg.ai_actions = self.actions_mgr.items()
         self.cfg.mic_device_name = self.mic_combo.currentData()
         self.cfg.loopback_device_name = self.them_combo.currentData()
         self.cfg.screen_monitor = self.monitor_combo.currentData() or 1
@@ -737,10 +775,8 @@ class SettingsPage(QWidget):
             ov.set_opacity(self.cfg.overlay_opacity)
         # webhook_url / webhook_when / todoist_token now live on the Integrations
         # page (moved in Phase D) — saved by IntegrationsPage._save(), not here.
-        self.cfg.custom_instructions_enabled = self.ci_toggle.isChecked()
-        self.cfg.custom_instructions = self.ci_text.toPlainText().strip()
-        self.cfg.templates = self.templates_mgr.items()
-        self.cfg.ai_actions = self.actions_mgr.items()
+        # (Custom instructions / templates / saved AI actions are persisted in the
+        # self-host branch above, alongside the rest of the AI-tab fields.)
         self.cfg.save()
         self.shell.home.refresh()  # reflect the dashboard toggle immediately
         self.save_btn.setText("Saved ✓")
@@ -752,6 +788,8 @@ class SettingsPage(QWidget):
         self.dark_btn.setIcon(self.theme.icon("moon", "text", 18))
         self.side_left_btn.setIcon(self.theme.icon("chevron-left", "text", 16))
         self.side_right_btn.setIcon(self.theme.icon("chevron-right", "text", 16))
-        self.test_btn.setIcon(self.theme.icon("globe", "text_muted", 16))
+        # the Transcription tab (and its Test button) is absent in cloud mode
+        if hasattr(self, "test_btn"):
+            self.test_btn.setIcon(self.theme.icon("globe", "text_muted", 16))
         self._sync_theme_buttons()
         self._sync_side_buttons()

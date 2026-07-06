@@ -333,7 +333,13 @@ class AccountCard(QFrame):
         self.refresh()
 
     def refresh(self) -> None:
-        name = (self.cfg.account_name or "").strip() or "Guest"
+        if self.cfg.account_mode == "cloud" and (self.cfg.cloud_email or "").strip():
+            # signed into Earshot Plus: show who, and that this is the paid tier
+            name = (self.cfg.account_name or "").strip() or self.cfg.cloud_email.split("@")[0]
+            self.sub_lbl.setText("Earshot Plus")
+        else:
+            name = (self.cfg.account_name or "").strip() or "Guest"
+            self.sub_lbl.setText("Local account")
         self.name_lbl.setText(name)
         self.avatar.setStyleSheet(
             f"background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};"
@@ -378,6 +384,11 @@ class Shell(QMainWindow):
         self.show_home()
         # after the window is up, quietly salvage any recording a crash left behind
         QTimer.singleShot(900, self._salvage_interrupted)
+        # first-run setup wizard — after the window shows, only if never completed.
+        # Skipped under the offscreen platform (headless/CI): there's no user to
+        # walk through it, and a modal exec() would block a test's processEvents().
+        if not self.cfg.onboarding_done and not self._headless():
+            QTimer.singleShot(300, self.run_onboarding)
 
         # call auto-detection: offer to record when another app starts using the mic
         from .call_watcher import CallWatcher
@@ -646,10 +657,36 @@ class Shell(QMainWindow):
         self._clear_selections()
 
     def show_account(self) -> None:
-        self.account.apply_theme()
+        self.account.refresh()
         self.stack.setCurrentWidget(self.account)
         self._set_active("none")
         self._clear_selections()
+
+    def on_account_changed(self) -> None:
+        """Called after signing in to / out of Earshot Plus: rebuild the Settings
+        tabs (Transcription/AI hide in cloud mode) and refresh the sidebar card."""
+        if hasattr(self.settings, "refresh_tabs"):
+            self.settings.refresh_tabs()
+        self.refresh_account_card()
+
+    @staticmethod
+    def _headless() -> bool:
+        """True under the offscreen Qt platform (tests / CI) — where auto-opening
+        a modal wizard would block the event loop."""
+        import os
+
+        return os.environ.get("QT_QPA_PLATFORM", "") == "offscreen"
+
+    def run_onboarding(self) -> None:
+        """Open the first-run setup wizard (also re-runnable from Settings). The
+        wizard sets cfg.onboarding_done on finish AND on close, so it never nags
+        twice. After it closes, reflect any account/settings changes it made."""
+        from .onboarding import OnboardingDialog
+        dlg = OnboardingDialog(self, self.cfg, self.theme, shell=self)
+        dlg.exec()
+        self.on_account_changed()
+        if self.stack.currentWidget() is self.account:
+            self.account.refresh()
 
     def refresh_account_card(self) -> None:
         """Called after the account display name changes (from the Account page)

@@ -120,6 +120,15 @@ class Config:
     # --- Account (local-only today; groundwork for future hosted sync) ---
     account_name: str = ""                # display name for the sidebar account card; "" -> "Guest"
 
+    # --- Earshot Plus (paid tier: managed transcription + AI via the cloud proxy) ---
+    # "selfhost" — free forever, bring-your-own keys (the default, everything today)
+    # "cloud"    — signed into Earshot Plus; transcription + AI route through the proxy
+    account_mode: str = "selfhost"
+    cloud_api_base: str = "https://api.tryearshot.app"
+    cloud_token: str = ""                 # device token from the device-link flow (bearer)
+    cloud_email: str = ""                 # signed-in email, for the account card
+    onboarding_done: bool = False         # first-run setup wizard already shown/finished
+
     extra: dict = field(default_factory=dict)
 
     @classmethod

@@ -15,6 +15,23 @@ from . import deepgram_client, openai_client, whisper_client
 
 def transcribe(audio_path: str | Path, cfg: Config, *, timeout: Optional[float] = None,
                progress=None) -> dict:
+    # Earshot Plus (cloud): the proxy holds the provider creds — route every
+    # request through the same chunker used for the online provider (each chunk
+    # fits the 24 MB planning cap, under the proxy's 25 MB hard limit).
+    if cfg.account_mode == "cloud":
+        from . import chunker, earshot_client
+
+        def one_cloud(p):
+            return earshot_client.transcribe(
+                p,
+                base_url=cfg.cloud_api_base,
+                token=cfg.cloud_token,
+                language=cfg.whisper_language,
+                timeout=timeout,
+            )
+
+        return chunker.transcribe_chunked(audio_path, one_cloud, max_bytes=24_000_000,
+                                          progress=progress)
     if cfg.transcription_provider == "online":
         from . import chunker
 
@@ -51,6 +68,9 @@ def transcribe(audio_path: str | Path, cfg: Config, *, timeout: Optional[float] 
 
 
 def test_connection(cfg: Config) -> bool:
+    if cfg.account_mode == "cloud":
+        from . import earshot_client
+        return earshot_client.ping(cfg.cloud_api_base, cfg.cloud_token)
     if cfg.transcription_provider == "online":
         return openai_client.ping(cfg.online_base_url, cfg.resolved_online_key())
     if cfg.transcription_provider == "deepgram":
