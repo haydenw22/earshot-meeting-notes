@@ -126,19 +126,19 @@ def main() -> int:
     # ---------------------------------------------------------------
     print("== existing-user safety: blank fields never clobber non-empty cfg values ==")
     ecfg = Config()
-    ecfg.whisper_url = "http://192.168.4.63:9000"
+    ecfg.whisper_url = "http://192.168.1.50:9000"
     ecfg.anthropic_api_key = "sk-ant-EXISTING"
     ecfg.online_api_key = "sk-groq-EXISTING"
     edlg = OnboardingDialog(None, ecfg, theme, shell=_Shell())
     edlg._choose("selfhost")
     # user just clicks through without retyping — every field is left as prefilled
-    check("home URL prefilled from cfg", edlg.tr_url.text() == "http://192.168.4.63:9000")
+    check("home URL prefilled from cfg", edlg.tr_url.text() == "http://192.168.1.50:9000")
     check("anthropic key prefilled from cfg", edlg.ai_anthropic_key.text() == "sk-ant-EXISTING")
     # simulate the user clearing a field then advancing — must NOT wipe the saved value
     edlg.tr_url.setText("")
     edlg.tr_online_key.setText("")
     edlg._save_selfhost_transcription()
-    check("cleared home URL keeps the existing value", ecfg.whisper_url == "http://192.168.4.63:9000")
+    check("cleared home URL keeps the existing value", ecfg.whisper_url == "http://192.168.1.50:9000")
     check("cleared online key keeps the existing value", ecfg.online_api_key == "sk-groq-EXISTING")
     edlg.ai_anthropic_key.setText("")
     edlg._save_selfhost_ai()
