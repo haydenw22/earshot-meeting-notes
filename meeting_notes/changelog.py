@@ -19,6 +19,16 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.26.2", "2026-07-07", "Consistent sidebar rows",
+        (
+            ("Fixed", (
+                "Meetings inside a project now look exactly like meetings in the MEETING "
+                "NOTES list: one line, trimmed with \"…\", same compact height. Long titles "
+                "no longer wrap into oversized rows.",
+            )),
+        ),
+    ),
+    Release(
         "0.26.1", "2026-07-07", "Earshot Plus pricing update",
         (
             ("Changed", (

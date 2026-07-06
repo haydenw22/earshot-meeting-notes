@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -123,31 +122,6 @@ class _MeetingList(QListWidget):
             return
         self.meeting_dropped.emit(mid, None)
         event.acceptProposedAction()
-
-
-class _TreeWrapDelegate(QStyledItemDelegate):
-    """Grow row heights so long titles wrap. Qt's built-in word-wrap never
-    expands the cell ("the cell will not be expanded to fit all the text"),
-    so without this the tree elides instead of wrapping like the mockup."""
-
-    def sizeHint(self, option, index):  # noqa: N802 (Qt override)
-        base = super().sizeHint(option, index)
-        view = option.widget
-        if view is None:
-            return base
-        depth = 1  # root decoration reserves one indent level for top rows
-        parent = index.parent()
-        while parent.isValid():
-            depth += 1
-            parent = parent.parent()
-        avail = (view.viewport().width() - view.indentation() * depth
-                 - 16 - 6    # icon + icon/text gap
-                 - 26)       # QSS item padding (10+10) + left accent border + fudge
-        if avail <= 40:
-            return base
-        rect = option.fontMetrics.boundingRect(
-            0, 0, avail, 100000, Qt.TextFlag.TextWordWrap, index.data() or "")
-        return QSize(base.width(), max(base.height(), rect.height() + 20))
 
 
 class _FolderTree(QTreeWidget):
@@ -589,12 +563,11 @@ class Shell(QMainWindow):
         self.folder_tree.setRootIsDecorated(True)
         self.folder_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folder_tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # mockup: long meeting titles wrap onto extra lines instead of eliding,
-        # and the tree flows borderless in the sidebar sized to its content
-        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.folder_tree.setWordWrap(True)
-        self.folder_tree.setUniformRowHeights(False)
-        self.folder_tree.setItemDelegate(_TreeWrapDelegate(self.folder_tree))
+        # rows are IDENTICAL to the MEETING NOTES list below: one line, elided,
+        # same pill height — filed and unfiled meetings must read the same
+        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.folder_tree.setWordWrap(False)
+        self.folder_tree.setUniformRowHeights(True)
         self.folder_tree.itemClicked.connect(self._on_tree_click)
         self.folder_tree.itemExpanded.connect(lambda _i: self._queue_fit_folder_tree())
         self.folder_tree.itemCollapsed.connect(lambda _i: self._queue_fit_folder_tree())
