@@ -355,6 +355,67 @@ def main() -> int:
     finally:
         ec.httpx.post = orig_post
 
+    # ---------------------------------------------------------------
+    print("== CloudLinkDialog signs in end to end (regression: _on_linked shadowing) ==")
+    # The completion callback attribute once shadowed the _on_linked METHOD, so
+    # the worker's `linked` signal never reached the handler that saves the
+    # token: the site said "approved" and the app sat on "Waiting…" forever.
+    # Drive the REAL dialog + REAL QThread worker against stubbed client calls.
+    import time as _time
+
+    from PySide6.QtWidgets import QApplication
+
+    from meeting_notes.ui import cloud_link as cl
+    from meeting_notes.ui.theme_controller import ThemeController
+
+    app = QApplication.instance() or QApplication([])
+    dcfg = Config()
+    dcfg.cloud_api_base = "https://stub"
+    theme = ThemeController(dcfg)
+    theme.apply()
+
+    orig_req = cl.earshot_client.request_device_code
+    orig_poll = cl.earshot_client.poll_device
+    sent_names = []
+    cl.earshot_client.request_device_code = lambda base, *, app_version, device_name: (
+        sent_names.append(device_name) or
+        {"code": "ABC-123", "poll_token": "pt", "verify_url": "https://stub/link",
+         "expires_in": 900, "interval": 1})
+    cl.earshot_client.poll_device = lambda base, *, poll_token: {
+        "status": "ok", "device_token": "tok-123", "email": "h@x.io",
+        "plan": "plus", "sub_status": "beta"}
+    cb_data = []
+    try:
+        dlg = cl.CloudLinkDialog(None, dcfg, theme, on_linked=cb_data.append)
+        dlg.name_edit.setText("Hayden's laptop")
+        t0 = _time.time()
+        while _time.time() - t0 < 12 and not dlg.linked_ok:
+            app.processEvents()
+            _time.sleep(0.02)
+        check("dialog completes the sign-in", dlg.linked_ok is True)
+        check("token saved to cfg", dcfg.cloud_token == "tok-123")
+        check("account flips to cloud mode", dcfg.account_mode == "cloud")
+        check("completion callback invoked once", len(cb_data) == 1)
+        check("code is user-copyable (copy button exists)", hasattr(dlg, "copy_btn"))
+        dlg._copy_code()
+        check("copy puts the code on the clipboard",
+              QApplication.clipboard().text() == "ABC-123")
+        check("device name field exists and was prefilled", bool(dlg.name_edit))
+        # a retry after editing the name must send the edited name
+        dlg.linked_ok = False
+        dlg._start_link()
+        t0 = _time.time()
+        while _time.time() - t0 < 12 and not dlg.linked_ok:
+            app.processEvents()
+            _time.sleep(0.02)
+        check("edited device name is sent to the server",
+              sent_names[-1] == "Hayden's laptop")
+        dlg._stop_worker()
+        dlg.close()
+    finally:
+        cl.earshot_client.request_device_code = orig_req
+        cl.earshot_client.poll_device = orig_poll
+
     print("\nCLOUD TESTS PASSED")
     return 0
 

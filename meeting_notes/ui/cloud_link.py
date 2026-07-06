@@ -16,11 +16,12 @@ from __future__ import annotations
 import time
 import webbrowser
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -45,9 +46,10 @@ class _LinkWorker(QThread):
     linked = Signal(dict)           # {device_token, email, plan, sub_status}
     failed = Signal(str)            # friendly message
 
-    def __init__(self, base_url: str, parent=None):
+    def __init__(self, base_url: str, device_name: str = "", parent=None):
         super().__init__(parent)
         self.base_url = base_url
+        self.device_name = (device_name or "").strip() or _device_name()
         self._stop = False
 
     def stop(self) -> None:
@@ -56,7 +58,7 @@ class _LinkWorker(QThread):
     def run(self) -> None:
         try:
             info = earshot_client.request_device_code(
-                self.base_url, app_version=__version__, device_name=_device_name())
+                self.base_url, app_version=__version__, device_name=self.device_name)
         except CloudError as e:
             self.failed.emit(str(e))
             return
@@ -108,7 +110,11 @@ class CloudLinkDialog(QDialog):
         super().__init__(parent)
         self.cfg = cfg
         self.theme = theme
-        self._on_linked = on_linked
+        # NB: must NOT be named _on_linked — that would shadow the method below,
+        # so the worker's `linked` signal would connect to the callback (or None)
+        # instead of the handler that saves the token. That exact bug shipped:
+        # approval succeeded on the site and the app just sat there.
+        self._linked_cb = on_linked
         self.worker: _LinkWorker | None = None
         self._verify_url = "https://tryearshot.app"
         self.linked_ok = False
@@ -135,13 +141,34 @@ class CloudLinkDialog(QDialog):
         self.intro.setWordWrap(True)
         v.addWidget(self.intro)
 
+        name_row = QHBoxLayout()
+        name_lbl = QLabel("Device name")
+        name_lbl.setObjectName("Muted")
+        name_row.addWidget(name_lbl)
+        self.name_edit = QLineEdit(_device_name())
+        self.name_edit.setToolTip("How this PC appears in your account's device list")
+        name_row.addWidget(self.name_edit, 1)
+        v.addLayout(name_row)
+
         self.code_lbl = QLabel("Contacting Earshot Plus…")
         self.code_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.code_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.code_lbl.setStyleSheet(
             f"font-size:34px; font-weight:800; letter-spacing:6px; color:{self.theme.color('primary')};"
             "padding:8px 0;"
         )
         v.addWidget(self.code_lbl)
+
+        copy_row = QHBoxLayout()
+        copy_row.addStretch(1)
+        self.copy_btn = QPushButton("Copy code")
+        self.copy_btn.setProperty("variant", "ghost")
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setEnabled(False)
+        self.copy_btn.clicked.connect(self._copy_code)
+        copy_row.addWidget(self.copy_btn)
+        copy_row.addStretch(1)
+        v.addLayout(copy_row)
 
         self.status_lbl = QLabel("")
         self.status_lbl.setObjectName("Faint")
@@ -175,9 +202,10 @@ class CloudLinkDialog(QDialog):
         self._stop_worker()
         self.retry_btn.setVisible(False)
         self.open_btn.setEnabled(False)
+        self.copy_btn.setEnabled(False)
         self.code_lbl.setText("Contacting Earshot Plus…")
         self.status_lbl.setText("")
-        self.worker = _LinkWorker(self.cfg.cloud_api_base, self)
+        self.worker = _LinkWorker(self.cfg.cloud_api_base, self.name_edit.text(), self)
         self.worker.code_ready.connect(self._on_code_ready)
         self.worker.linked.connect(self._on_linked)
         self.worker.failed.connect(self._on_failed)
@@ -187,7 +215,15 @@ class CloudLinkDialog(QDialog):
         self._verify_url = verify_url or self._verify_url
         self.code_lbl.setText(code)
         self.open_btn.setEnabled(True)
+        self.copy_btn.setEnabled(True)
         self.status_lbl.setText("Waiting for you to enter the code at tryearshot.app…")
+
+    def _copy_code(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.clipboard().setText(self.code_lbl.text().strip())
+        self.copy_btn.setText("Copied ✓")
+        QTimer.singleShot(1600, lambda: self.copy_btn.setText("Copy code"))
 
     def _open_verify(self) -> None:
         try:
@@ -206,8 +242,8 @@ class CloudLinkDialog(QDialog):
         self.cfg.save()
         self.linked_ok = True
         self.status_lbl.setText("Signed in.")
-        if self._on_linked is not None:
-            self._on_linked(data)
+        if self._linked_cb is not None:
+            self._linked_cb(data)
         self.accept()
 
     def _on_failed(self, msg: str) -> None:

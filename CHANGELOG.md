@@ -4,6 +4,17 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] — 2026-07-07 · Sign-in fixed; named devices
+
+### Fixed
+
+- Signing in to Earshot Plus actually completes now. Approving the code on the website worked, but the app never noticed — an internal naming clash meant the success signal never reached the handler that saves your sign-in. A test now drives the real sign-in dialog end to end so this can't regress.
+
+### Added
+
+- The sign-in code can be copied with one click (and selected with the mouse).
+- Name each device when you link it — the name shows up in the Devices list on your account page at tryearshot.app, where you can also sign devices out remotely.
+
 ## [0.26.2] — 2026-07-07 · Consistent sidebar rows
 
 ### Fixed
