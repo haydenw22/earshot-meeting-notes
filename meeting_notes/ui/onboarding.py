@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from . import icons
 from .page_home import PaintedBackdrop
-from .widgets import Card
+from .widgets import Card, make_chip
 
 # tour slides: (icon, title, body)
 _TOUR = [
@@ -68,15 +68,21 @@ class OnboardingDialog(QDialog):
     # page indices in the stack
     WELCOME, TOUR1, TOUR2, TOUR3, CHOICE, SELF_TR, SELF_AI, PLUS, FINISH = range(9)
 
-    def __init__(self, parent, cfg, theme, *, shell=None):
+    def __init__(self, parent, cfg, theme, *, shell=None, mandatory=False):
         super().__init__(parent)
         self.cfg = cfg
         self.theme = theme
         self.shell = shell
+        self.mandatory = mandatory  # first run: must be completed, can't be dismissed
         self._path = None  # "selfhost" | "plus" once chosen
         self._finished_marked = False
 
         self.setWindowTitle("Welcome to Earshot")
+        if mandatory:
+            # no title-bar close button: finishing the wizard is the only way out
+            self.setWindowFlags(Qt.WindowType.Dialog
+                                | Qt.WindowType.CustomizeWindowHint
+                                | Qt.WindowType.WindowTitleHint)
         self.setMinimumSize(640, 560)
         self.resize(640, 560)
         self._build()
@@ -183,7 +189,8 @@ class OnboardingDialog(QDialog):
         t = QLabel("How do you want to run Earshot?")
         t.setObjectName("H2")
         lay.addWidget(t)
-        s = QLabel("You can switch at any time from Settings or the Account page.")
+        s = QLabel("Most people pick Earshot Plus — nothing to configure, first week free. "
+                   "Prefer to run your own AI? Self-hosting is free forever. Switch anytime.")
         s.setObjectName("Muted")
         s.setWordWrap(True)
         lay.addWidget(s)
@@ -191,12 +198,56 @@ class OnboardingDialog(QDialog):
         cards = QHBoxLayout()
         cards.setSpacing(16)
 
+        # ---- Earshot Plus: FIRST and visually recommended ----
+        plus_card = _ChoiceCard(lambda: self._choose("plus"))
+        self.plus_choice_card = plus_card
+        plus_card.setStyleSheet(
+            f"QFrame#Card{{border: 2px solid {self.theme.color('primary')};}}"
+        )
+        pcl = QVBoxLayout(plus_card)
+        pcl.setContentsMargins(20, 20, 20, 20)
+        pcl.setSpacing(8)
+        phead = QHBoxLayout()
+        pic = QLabel()
+        pic.setPixmap(icons.pixmap("cloud", self.theme.color("primary"), 30))
+        phead.addWidget(pic)
+        phead.addStretch(1)
+        self.plus_badge = make_chip("Recommended", fg=self.theme.color("on_primary"),
+                                    bg=self.theme.color("primary"))
+        phead.addWidget(self.plus_badge)
+        pcl.addLayout(phead)
+        pt = QLabel("Earshot Plus")
+        pt.setObjectName("H3")
+        pcl.addWidget(pt)
+        pp = QLabel("Managed transcription + AI · 7-day free trial · $15/mo")
+        pp.setObjectName("Muted")
+        pp.setWordWrap(True)
+        pcl.addWidget(pp)
+        pcl.addSpacing(6)
+        for line in ("No API keys, no setup — sign in and go",
+                     "Fast, accurate managed models",
+                     "40 hours of transcription a month",
+                     "Cloud sync & hosted sharing as they roll out",
+                     "Priority support"):
+            b = QLabel(f"•  {line}")
+            b.setObjectName("Faint")
+            b.setWordWrap(True)
+            pcl.addWidget(b)
+        pcl.addStretch(1)
+        pbtn = QPushButton("Start with Plus")
+        pbtn.setProperty("variant", "primary")
+        pbtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pbtn.clicked.connect(lambda: self._choose("plus"))
+        pcl.addWidget(pbtn)
+        cards.addWidget(plus_card, 1)
+
+        # ---- Self-host: the free path, visually secondary ----
         self_card = _ChoiceCard(lambda: self._choose("selfhost"))
         scl = QVBoxLayout(self_card)
         scl.setContentsMargins(20, 20, 20, 20)
         scl.setSpacing(8)
         sic = QLabel()
-        sic.setPixmap(icons.pixmap("settings", self.theme.color("primary"), 30))
+        sic.setPixmap(icons.pixmap("settings", self.theme.color("text_muted"), 30))
         scl.addWidget(sic)
         st = QLabel("Self-host")
         st.setObjectName("H3")
@@ -215,33 +266,11 @@ class OnboardingDialog(QDialog):
             b.setWordWrap(True)
             scl.addWidget(b)
         scl.addStretch(1)
+        sbtn = QPushButton("Set up my own keys")
+        sbtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        sbtn.clicked.connect(lambda: self._choose("selfhost"))
+        scl.addWidget(sbtn)
         cards.addWidget(self_card, 1)
-
-        plus_card = _ChoiceCard(lambda: self._choose("plus"))
-        pcl = QVBoxLayout(plus_card)
-        pcl.setContentsMargins(20, 20, 20, 20)
-        pcl.setSpacing(8)
-        pic = QLabel()
-        pic.setPixmap(icons.pixmap("cloud", self.theme.color("primary"), 30))
-        pcl.addWidget(pic)
-        pt = QLabel("Earshot Plus")
-        pt.setObjectName("H3")
-        pcl.addWidget(pt)
-        pp = QLabel("Managed transcription + AI · from $15/mo")
-        pp.setObjectName("Muted")
-        pp.setWordWrap(True)
-        pcl.addWidget(pp)
-        pcl.addSpacing(6)
-        for line in ("No API keys, no setup — sign in and go",
-                     "Fast, accurate managed models",
-                     "40 hours of transcription a month",
-                     "Cloud sync & hosted sharing as they roll out"):
-            b = QLabel(f"•  {line}")
-            b.setObjectName("Faint")
-            b.setWordWrap(True)
-            pcl.addWidget(b)
-        pcl.addStretch(1)
-        cards.addWidget(plus_card, 1)
 
         lay.addLayout(cards, 1)
         return w
@@ -444,9 +473,11 @@ class OnboardingDialog(QDialog):
         self.plus_signin_btn.setIcon(icons.icon("cloud", self.theme.color("on_primary"), 15))
         self.plus_signin_btn.clicked.connect(self._plus_sign_in)
         row.addWidget(self.plus_signin_btn)
-        self.plus_skip_btn = QPushButton("Skip for now")
+        # the alternative isn't "skip setup" — it's the free path
+        self.plus_skip_btn = QPushButton("Use my own keys instead")
+        self.plus_skip_btn.setProperty("variant", "ghost")
         self.plus_skip_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.plus_skip_btn.clicked.connect(lambda: self._show_page(self.FINISH))
+        self.plus_skip_btn.clicked.connect(lambda: self._choose("selfhost"))
         row.addWidget(self.plus_skip_btn)
         row.addStretch(1)
         lay.addLayout(row)
@@ -514,8 +545,9 @@ class OnboardingDialog(QDialog):
             self.next_btn.setText("Finish")
         else:
             self.next_btn.setText("Next")
-        # Skip is offered everywhere except the finish page (where Finish is the action)
-        self.skip_btn.setVisible(not is_finish)
+        # Skip is offered everywhere except the finish page (where Finish is the
+        # action) — and never on the mandatory first run
+        self.skip_btn.setVisible(not is_finish and not self.mandatory)
 
     def _on_back(self) -> None:
         index = self.stack.currentIndex()
@@ -590,11 +622,18 @@ class OnboardingDialog(QDialog):
         self._mark_done()
         self.accept()
 
-    # closing the dialog (X / Esc) must also mark onboarding_done — never nag twice
+    # Mandatory first run: Esc / Alt+F4 / X do nothing until the wizard is
+    # finished. The Settings re-run (non-mandatory) stays dismissable, and
+    # marks onboarding_done on close so it never nags.
     def reject(self) -> None:  # noqa: N802 (Qt override)
+        if self.mandatory and not self._finished_marked:
+            return
         self._mark_done()
         super().reject()
 
     def closeEvent(self, event):  # noqa: N802 (Qt override)
+        if self.mandatory and not self._finished_marked:
+            event.ignore()
+            return
         self._mark_done()
         super().closeEvent(event)

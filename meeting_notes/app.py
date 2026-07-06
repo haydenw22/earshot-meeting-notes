@@ -64,5 +64,17 @@ def run() -> int:
 
     window = Shell(repo, cfg, theme)
     window.setWindowIcon(icon)
+
+    # First run: the setup wizard is MANDATORY and runs before the main window
+    # exists on screen — no app in the background, no way to dismiss it without
+    # finishing. (Skipped headless: tests/CI have no user to walk through it.)
+    if not cfg.onboarding_done and not Shell._headless():
+        from .ui.onboarding import OnboardingDialog
+
+        wizard = OnboardingDialog(None, cfg, theme, shell=window, mandatory=True)
+        wizard.setWindowIcon(icon)
+        wizard.exec()
+        window.on_account_changed()
+
     window.show()
     return app.exec()

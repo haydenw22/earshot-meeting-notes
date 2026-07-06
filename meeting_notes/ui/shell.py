@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -57,9 +58,36 @@ _MEETING_MIME = "application/x-earshot-meeting"
 
 class _MeetingList(QListWidget):
     """The unfiled-meetings list — draggable onto a folder in the tree above,
-    and a valid drop target for a meeting dragged out of a folder (= unfile)."""
+    and a valid drop target for a meeting dragged out of a folder (= unfile).
+
+    Content-sized like _FolderTree: it lives with the projects tree inside ONE
+    sidebar scroll column, so it reports its content height instead of
+    scrolling internally (twin cramped scrollbars was the failure mode)."""
 
     meeting_dropped = Signal(int, object)  # meeting_id, folder_id (always None here)
+
+    _MIN_H = 34  # ~one row
+
+    def __init__(self):
+        super().__init__()
+        self._content_h = self._MIN_H
+        pol = self.sizePolicy()
+        pol.setVerticalPolicy(QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(pol)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def set_content_height(self, h: int) -> None:
+        h = max(self._MIN_H, h)
+        if h != self._content_h:
+            self._content_h = h
+            self.setMaximumHeight(h)
+            self.updateGeometry()
+
+    def sizeHint(self):  # noqa: N802 (Qt override)
+        return QSize(super().sizeHint().width(), self._content_h)
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt override)
+        return QSize(super().minimumSizeHint().width(), self._MIN_H)
 
     def mimeTypes(self) -> list[str]:
         return [_MEETING_MIME]
@@ -135,8 +163,10 @@ class _FolderTree(QTreeWidget):
 
     meeting_dropped = Signal(int, object)  # meeting_id, folder_id (None = unfile)
 
-    _MIN_H = 34          # ~one row: what we shrink to under pressure
-    _MAX_CONTENT_H = 320  # huge project lists scroll rather than eat the sidebar
+    _MIN_H = 34  # ~one row: what we shrink to under pressure
+    # effectively uncapped: the tree sits in the sidebar's single scroll column
+    # now, so overflow scrolls at the COLUMN level instead of inside the tree
+    _MAX_CONTENT_H = 100000
 
     def __init__(self):
         super().__init__()
@@ -384,11 +414,9 @@ class Shell(QMainWindow):
         self.show_home()
         # after the window is up, quietly salvage any recording a crash left behind
         QTimer.singleShot(900, self._salvage_interrupted)
-        # first-run setup wizard — after the window shows, only if never completed.
-        # Skipped under the offscreen platform (headless/CI): there's no user to
-        # walk through it, and a modal exec() would block a test's processEvents().
-        if not self.cfg.onboarding_done and not self._headless():
-            QTimer.singleShot(300, self.run_onboarding)
+        # NB: the first-run setup wizard is launched from app.py BEFORE this
+        # window is shown (mandatory, app-not-in-background). run_onboarding()
+        # remains for the Settings → "Run setup guide again" path.
 
         # call auto-detection: offer to record when another app starts using the mic
         from .call_watcher import CallWatcher
@@ -515,6 +543,22 @@ class Shell(QMainWindow):
         self.ask_btn = self._nav_button("Ask Earshot", self.show_ask)
         lay.addWidget(self.ask_btn)
 
+        # ---- middle column: PROJECTS + MEETING NOTES in ONE scroll area ----
+        # Both sections size to their content and the column scrolls as a
+        # whole — two widgets fighting for height gave cramped twin
+        # scrollbars on short windows. The host must report its content
+        # height as its MINIMUM: QScrollArea(widgetResizable) compresses the
+        # widget to minimumSizeHint before it ever scrolls, which would
+        # min-clamp-overlap the sections all over again.
+        class _MidHost(QWidget):
+            def minimumSizeHint(inner):  # noqa: N805 (Qt override, local class)
+                return QSize(0, inner.sizeHint().height())
+
+        mid_host = _MidHost()
+        mid_lay = QVBoxLayout(mid_host)
+        mid_lay.setContentsMargins(0, 0, 0, 0)
+        mid_lay.setSpacing(8)
+
         # ---- PROJECTS section (internal name/keys/DB stay folder_*) ----
         folders_head = QHBoxLayout()
         folders_head.setSpacing(4)
@@ -531,7 +575,7 @@ class Shell(QMainWindow):
         self.folders_chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.folders_chevron_btn.clicked.connect(self._toggle_folders_collapsed)
         folders_head.addWidget(self.folders_chevron_btn)
-        lay.addLayout(folders_head)
+        mid_lay.addLayout(folders_head)
 
         self.folder_tree = _FolderTree()
         self.folder_tree.setObjectName("SidebarTree")
@@ -539,6 +583,7 @@ class Shell(QMainWindow):
         self.folder_tree.setIndentation(14)
         self.folder_tree.setRootIsDecorated(True)
         self.folder_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.folder_tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # mockup: long meeting titles wrap onto extra lines instead of eliding,
         # and the tree flows borderless in the sidebar sized to its content
         self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideNone)
@@ -558,11 +603,11 @@ class Shell(QMainWindow):
         self.folder_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.folder_tree.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
         self.folder_tree.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
-        lay.addWidget(self.folder_tree)
+        mid_lay.addWidget(self.folder_tree)
 
         sect = QLabel("MEETING NOTES")
         sect.setObjectName("SectionLabel")
-        lay.addWidget(sect)
+        mid_lay.addWidget(sect)
 
         self.meeting_list = _MeetingList()
         self.meeting_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -575,7 +620,16 @@ class Shell(QMainWindow):
         self.meeting_list.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.meeting_list.setDragDropMode(QListWidget.DragDropMode.DragDrop)
         self.meeting_list.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
-        lay.addWidget(self.meeting_list, 1)
+        mid_lay.addWidget(self.meeting_list)
+        mid_lay.addStretch(1)
+
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setObjectName("SidebarScroll")
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setWidget(mid_host)
+        lay.addWidget(self.sidebar_scroll, 1)
 
         # bottom cluster (mockup order): Integrations -> Settings -> theme
         # toggle -> account card -> version label
@@ -678,9 +732,9 @@ class Shell(QMainWindow):
         return os.environ.get("QT_QPA_PLATFORM", "") == "offscreen"
 
     def run_onboarding(self) -> None:
-        """Open the first-run setup wizard (also re-runnable from Settings). The
-        wizard sets cfg.onboarding_done on finish AND on close, so it never nags
-        twice. After it closes, reflect any account/settings changes it made."""
+        """Re-run the setup wizard from Settings. Non-mandatory here (the user
+        already finished it once) — closable like any dialog. After it closes,
+        reflect any account/settings changes it made."""
         from .onboarding import OnboardingDialog
         dlg = OnboardingDialog(self, self.cfg, self.theme, shell=self)
         dlg.exec()
@@ -953,6 +1007,7 @@ class Shell(QMainWindow):
                 folder_item.setHidden(False)
                 for j in range(folder_item.childCount()):
                     folder_item.child(j).setHidden(False)
+            self._queue_fit_sidebar()
             return
         # full-text match across transcript + notes + attendees + agenda, plus
         # a plain title substring so partial words still narrow the list live.
@@ -973,6 +1028,24 @@ class Shell(QMainWindow):
                 child.setHidden(not visible)
                 any_visible = any_visible or visible
             folder_item.setHidden(not any_visible)
+        self._queue_fit_sidebar()
+
+    def _queue_fit_sidebar(self) -> None:
+        """Re-fit BOTH content-sized sidebar sections after the pending relayout."""
+        self._queue_fit_folder_tree()
+        QTimer.singleShot(0, self._fit_meeting_list_height)
+
+    def _fit_meeting_list_height(self) -> None:
+        """Size the unfiled list to its visible content — it scrolls at the
+        sidebar-column level, never internally."""
+        lst = self.meeting_list
+        lst.doItemsLayout()
+        h = 0
+        for i in range(lst.count()):
+            item = lst.item(i)
+            if not item.isHidden():
+                h += lst.visualItemRect(item).height()
+        lst.set_content_height(h + 6)
 
     def _on_list_click(self, item: QListWidgetItem) -> None:
         mid = item.data(Qt.ItemDataRole.UserRole)

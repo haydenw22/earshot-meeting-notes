@@ -25,6 +25,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ["LOCALAPPDATA"] = tempfile.mkdtemp(prefix="earshot_test_")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from meeting_notes.config import Config  # noqa: E402
@@ -144,22 +145,42 @@ def main() -> int:
     check("cleared anthropic key keeps the existing value", ecfg.anthropic_api_key == "sk-ant-EXISTING")
 
     # ---------------------------------------------------------------
-    print("== wizard: closing the dialog also sets onboarding_done (never nag twice) ==")
+    print("== wizard (Settings re-run, non-mandatory): closing sets onboarding_done ==")
     ccfg = Config()
     check("fresh cfg starts with onboarding_done False", ccfg.onboarding_done is False)
     cdlg = OnboardingDialog(None, ccfg, theme, shell=_Shell())
-    cdlg.reject()  # simulates closing / Escape
-    check("closing the wizard sets onboarding_done", ccfg.onboarding_done is True)
+    cdlg.reject()  # simulates closing / Escape on the re-run
+    check("closing the re-run wizard sets onboarding_done", ccfg.onboarding_done is True)
 
-    print("== wizard: choosing Earshot Plus routes to the Plus page with Skip ==")
+    print("== wizard (first run): MANDATORY — cannot be dismissed until finished ==")
+    mcfg = Config()
+    mdlg = OnboardingDialog(None, mcfg, theme, shell=_Shell(), mandatory=True)
+    check("no title-bar close button in mandatory mode",
+          not bool(mdlg.windowFlags() & Qt.WindowType.WindowCloseButtonHint))
+    mdlg.reject()  # what Esc triggers
+    check("Escape does nothing in mandatory mode", mcfg.onboarding_done is False)
+    check("close is refused in mandatory mode",
+          mdlg.close() is False and mcfg.onboarding_done is False)
+    mdlg._show_page(OnboardingDialog.CHOICE)
+    check("Skip is hidden in mandatory mode", mdlg.skip_btn.isHidden())
+    mdlg._finish()
+    check("finishing still works in mandatory mode", mcfg.onboarding_done is True)
+    check("after finish the dialog can close", mdlg.close() is True)
+
+    print("== wizard: the choice screen pushes Earshot Plus ==")
     pcfg = Config()
     pdlg = OnboardingDialog(None, pcfg, theme, shell=_Shell())
+    check("Plus card exists and is highlighted", hasattr(pdlg, "plus_choice_card"))
+    check("Plus card carries a Recommended badge", pdlg.plus_badge.text() == "Recommended")
     pdlg._choose("plus")
     check("plus path selected", pdlg._path == "plus")
     check("plus → plus page", pdlg.stack.currentIndex() == OnboardingDialog.PLUS)
-    check("plus page has a Skip-for-now button", hasattr(pdlg, "plus_skip_btn"))
+    check("plus page offers the self-host path, not a bare skip",
+          pdlg.plus_skip_btn.text() == "Use my own keys instead")
     pdlg.plus_skip_btn.click()
-    check("skip-for-now jumps to finish", pdlg.stack.currentIndex() == OnboardingDialog.FINISH)
+    check("own-keys routes to the self-host setup",
+          pdlg.stack.currentIndex() == OnboardingDialog.SELF_TR)
+    check("own-keys switches the path to selfhost", pdlg._path == "selfhost")
 
     # ---------------------------------------------------------------
     print("== settings: Transcription + AI tabs hidden in cloud mode, shown in selfhost ==")

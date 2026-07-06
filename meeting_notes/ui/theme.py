@@ -298,6 +298,11 @@ QTextBrowser, QTextEdit {{
     color: {t['text']};
 }}
 
+/* ---------- sidebar middle scroll column ---------- */
+/* invisible chrome: the PROJECTS + MEETING NOTES sections scroll as one */
+QScrollArea#SidebarScroll {{ background: transparent; border: none; }}
+QScrollArea#SidebarScroll > QWidget > QWidget {{ background: transparent; }}
+
 /* ---------- sidebar projects tree ---------- */
 /* borderless like the meeting list below it — the tree flows in the sidebar
    (mockup), not a boxed panel. No ::branch rule: styling it would replace the

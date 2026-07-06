@@ -19,6 +19,21 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.25.0", "2026-07-06", "Mandatory setup guide & sidebar overhaul",
+        (
+            ("Changed", (
+                "The first-run setup guide now runs before the app opens and must be "
+                "completed — no closing it, no app in the background. The choice screen "
+                "leads with Earshot Plus (recommended) while self-hosting stays free and "
+                "fully supported; \"skip\" on the Plus page became \"Use my own keys "
+                "instead\". The Settings re-run stays dismissable.",
+                "The sidebar's PROJECTS and MEETING NOTES sections now flow in one "
+                "smoothly-scrolling column instead of fighting for space with two "
+                "cramped scrollbars on smaller windows.",
+            )),
+        ),
+    ),
+    Release(
         "0.24.0", "2026-07-06", "Setup guide & Earshot Plus groundwork",
         (
             ("Added", (

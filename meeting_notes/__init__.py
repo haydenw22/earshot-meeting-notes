@@ -1,3 +1,3 @@
 """Meeting Notes — a local Windows meeting recorder, transcriber and note-taker."""
 
-__version__ = "0.24.0"
+__version__ = "0.25.0"
