@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.26.1] — 2026-07-07 · Earshot Plus pricing update
+
+### Changed
+
+- Earshot Plus is now $9/month (was $15) — the setup guide and Account page reflect the new price.
+
 ## [0.26.0] — 2026-07-07 · Recording indicator & sidebar polish
 
 ### Added

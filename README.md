@@ -31,7 +31,7 @@ unless you choose one.
     transcribes generously; any Anthropic / OpenAI-compatible / local model
     writes the notes) or point it at your own Whisper server.
   - **[Earshot Plus](https://tryearshot.app/pricing)** — managed transcription
-    + AI, zero keys, zero setup. $15/month, 7-day free trial. It's how the
+    + AI, zero keys, zero setup. $9/month, 7-day free trial. It's how the
     project pays for itself.
 
 ## Why Earshot

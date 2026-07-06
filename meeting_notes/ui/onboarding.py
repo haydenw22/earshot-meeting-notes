@@ -219,7 +219,7 @@ class OnboardingDialog(QDialog):
         pt = QLabel("Earshot Plus")
         pt.setObjectName("H3")
         pcl.addWidget(pt)
-        pp = QLabel("Managed transcription + AI · 7-day free trial · $15/mo")
+        pp = QLabel("Managed transcription + AI · 7-day free trial · $9/mo")
         pp.setObjectName("Muted")
         pp.setWordWrap(True)
         pcl.addWidget(pp)

@@ -177,7 +177,7 @@ class AccountPage(QWidget):
     def _plus_card(self) -> Card:
         card, cl = self._card(
             "Earshot Plus",
-            "Managed transcription and AI, from $15/mo — no keys, no home server. Everything you "
+            "Managed transcription and AI, from $9/mo — no keys, no home server. Everything you "
             "record still lives on this PC.",
         )
         for line in PLUS_PITCH:

@@ -19,6 +19,15 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.26.1", "2026-07-07", "Earshot Plus pricing update",
+        (
+            ("Changed", (
+                "Earshot Plus is now $9/month (was $15) — the setup guide and Account page "
+                "reflect the new price.",
+            )),
+        ),
+    ),
+    Release(
         "0.26.0", "2026-07-07", "Recording indicator & sidebar polish",
         (
             ("Added", (
