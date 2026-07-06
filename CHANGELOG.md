@@ -4,6 +4,13 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.22.2] — 2026-07-06 · To-dos stay visible on narrow windows
+
+### Fixed
+
+- On a narrow window (e.g. a vertical monitor) the home page's To do and AI insights cards disappeared entirely. They now reflow full-width underneath the meeting list instead of hiding.
+- Long meeting titles no longer push the home page wider than the window (content was getting clipped at the right edge on narrow screens) — row titles now shorten with "…" and show the full title in a tooltip.
+
 ## [0.22.1] — 2026-07-03 · Fix online transcription (Groq / OpenAI / Mistral)
 
 ### Fixed

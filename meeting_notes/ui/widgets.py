@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QSize, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCalendarWidget,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +38,42 @@ class Card(QFrame):
         self.setObjectName("Card")
         if shadow:
             add_shadow(self)
+
+
+class ElideLabel(QLabel):
+    """A QLabel that elides with "…" instead of forcing the layout wide.
+
+    A plain QLabel's minimumSizeHint is its full text width, so a long meeting
+    title makes the whole page wider than a narrow window — content then gets
+    clipped at the right edge (our pages disable horizontal scroll). This label
+    reports a tiny minimum width and re-elides whenever it is resized; the full
+    text goes in the tooltip when it doesn't fit."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__("", parent)
+        self._full = text or ""
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        super().setText(self._full)
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt override)
+        self._full = text or ""
+        self._elide()
+
+    def fullText(self) -> str:  # noqa: N802 (Qt-style accessor)
+        return self._full
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 (Qt override)
+        return QSize(48, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        fm = self.fontMetrics()
+        shown = fm.elidedText(self._full, Qt.TextElideMode.ElideRight, max(24, self.width()))
+        super().setText(shown)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 def make_chip(text: str, *, fg: str, bg: str) -> QLabel:

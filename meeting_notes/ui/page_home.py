@@ -12,6 +12,7 @@ import os
 from PySide6.QtCore import QPoint, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QRadialGradient
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QHBoxLayout,
     QLabel,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from ..storage.repository import Meeting
 from . import icons
-from .widgets import Card, make_chip, status_chip
+from .widgets import Card, ElideLabel, make_chip, status_chip
 
 # Rail collapses below this viewport width (spec: "responsive — below ~1050px
 # hide the right rail").
@@ -178,18 +179,19 @@ class MeetingRow(_ClickableCard):
 
         mid = QVBoxLayout()
         mid.setSpacing(2)
-        title = QLabel(meeting.title or "Untitled meeting")
+        # ElideLabel: a plain QLabel's minimum width is its full text, which on
+        # narrow windows (vertical monitor) pushes the page past the right edge
+        title = ElideLabel(meeting.title or "Untitled meeting")
         title.setObjectName("H3")
         title.setTextFormat(Qt.TextFormat.PlainText)  # AI-generated title -> no rich text
         title.setWordWrap(False)
-        title.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         mid.addWidget(title)
         bits = [meeting.date_text or meeting.date_iso]
         if meeting.attendees:
             bits.append(", ".join(meeting.attendees[:3]) + ("…" if len(meeting.attendees) > 3 else ""))
         if meeting.duration_secs:
             bits.append(f"{int(meeting.duration_secs // 60)}m")
-        meta = QLabel("   ·   ".join(b for b in bits if b))
+        meta = ElideLabel("   ·   ".join(b for b in bits if b))
         meta.setObjectName("Faint")
         meta.setWordWrap(False)
         mid.addWidget(meta)
@@ -345,24 +347,26 @@ class HomePage(QWidget):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # host: two columns side by side — left (stretch, the list) + right
-        # rail (fixed width) — both scroll together with the page.
+        # rail (fixed width) — both scroll together with the page. On narrow
+        # windows (e.g. a vertical monitor) the same layout flips vertical and
+        # the rail stacks under the list instead of disappearing.
         self.columns_host = QWidget()
-        columns = QHBoxLayout(self.columns_host)
-        columns.setContentsMargins(2, 2, 2, 2)
-        columns.setSpacing(20)
+        self.columns = QHBoxLayout(self.columns_host)
+        self.columns.setContentsMargins(2, 2, 2, 2)
+        self.columns.setSpacing(20)
 
         self.list_host = QWidget()
         self.list_lay = QVBoxLayout(self.list_host)
         self.list_lay.setContentsMargins(0, 0, 0, 0)
         self.list_lay.setSpacing(12)
-        columns.addWidget(self.list_host, 1)
+        self.columns.addWidget(self.list_host, 1)
 
         self.rail = QWidget()
         self.rail.setFixedWidth(_RAIL_WIDTH)
         self.rail_lay = QVBoxLayout(self.rail)
         self.rail_lay.setContentsMargins(0, 0, 0, 0)
         self.rail_lay.setSpacing(16)
-        columns.addWidget(self.rail, 0)
+        self.columns.addWidget(self.rail, 0)
 
         self.scroll.setWidget(self.columns_host)
         root.addWidget(self.scroll, 1)
@@ -852,7 +856,17 @@ class HomePage(QWidget):
 
     # ---------- responsive rail ----------
     def _apply_rail_visibility(self) -> None:
-        self.rail.setVisible(self.width() >= _RAIL_BREAKPOINT)
+        """Reflow, never hide: narrow windows (vertical monitors) stack the
+        rail full-width UNDER the meeting list — the to-dos must stay reachable."""
+        narrow = self.width() < _RAIL_BREAKPOINT
+        if narrow:
+            self.columns.setDirection(QBoxLayout.Direction.TopToBottom)
+            self.rail.setMinimumWidth(0)
+            self.rail.setMaximumWidth(16777215)
+        else:
+            self.columns.setDirection(QBoxLayout.Direction.LeftToRight)
+            self.rail.setFixedWidth(_RAIL_WIDTH)
+        self.rail.setVisible(True)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

@@ -297,25 +297,48 @@ def main() -> int:
           len(checkboxes_all) == len(all_pending))
     hb_home._todo_show_all = False
 
-    print("-- responsive rail: visible >= 1050px wide, hidden below it --")
+    print("-- responsive rail: side-by-side when wide, stacked (never hidden) when narrow --")
     # An unshown top-level widget's width() doesn't reliably update from
     # resize() alone offscreen, so stub width() itself to drive the handler
     # deterministically — exactly what _apply_rail_visibility reads. Check
     # isHidden() rather than isVisible(): isVisible() requires the whole
     # ancestor chain to be shown on screen, which an offscreen test never does.
+    from PySide6.QtWidgets import QBoxLayout as _QBox
     orig_width = hb_home.width
     try:
         hb_home.width = lambda: 1400
         hb_home._apply_rail_visibility()
         check("rail visible at 1400px", not hb_home.rail.isHidden())
+        check("columns side-by-side at 1400px",
+              hb_home.columns.direction() == _QBox.Direction.LeftToRight)
+        check("rail keeps its fixed width when side-by-side",
+              hb_home.rail.maximumWidth() == hb_home.rail.minimumWidth())
         hb_home.width = lambda: 900
         hb_home._apply_rail_visibility()
-        check("rail hidden at 900px", hb_home.rail.isHidden())
+        check("rail STILL visible at 900px (vertical monitor)", not hb_home.rail.isHidden())
+        check("columns stack vertically at 900px",
+              hb_home.columns.direction() == _QBox.Direction.TopToBottom)
+        check("rail released to full width when stacked",
+              hb_home.rail.maximumWidth() > 10000)
         hb_home.width = lambda: 1050
         hb_home._apply_rail_visibility()
-        check("rail visible exactly at the 1050px breakpoint", not hb_home.rail.isHidden())
+        check("side-by-side exactly at the 1050px breakpoint",
+              hb_home.columns.direction() == _QBox.Direction.LeftToRight)
     finally:
         hb_home.width = orig_width
+
+    print("-- ElideLabel: long titles shrink instead of forcing the page wide --")
+    from meeting_notes.ui.widgets import ElideLabel
+    long_title = "A very long meeting title that cannot possibly fit in a narrow meeting row"
+    el = ElideLabel(long_title)
+    check("elide label reports a tiny minimum width (page can shrink)",
+          el.minimumSizeHint().width() <= 60)
+    el.setFixedWidth(120)
+    el.resize(120, 20)
+    el._elide()  # offscreen resize events are async; drive the handler directly
+    check("elide label ellipsizes when narrow", el.text().endswith("…"))
+    check("full text preserved for the tooltip",
+          el.fullText() == long_title and el.toolTip() == long_title)
 
     hb_repo.close()
 
