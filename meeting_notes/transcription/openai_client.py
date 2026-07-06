@@ -61,18 +61,21 @@ def transcribe(
         raise OnlineTranscriptionError("No API key set for the online transcription service.")
     base = base_url.rstrip("/")
     url = base + "/audio/transcriptions"
-    # OpenAI/Groq style: repeated bracket key for timestamp_granularities[]
-    form = [
-        ("model", model),
-        ("response_format", "verbose_json"),
-        ("timestamp_granularities[]", "segment"),
-    ]
+    # NB: pass the form as a DICT, not a list of tuples. httpx (0.28) rejects a
+    # list-of-tuples `data=` alongside `files=` with a cryptic multipart-encoding
+    # error ("sequence item N: expected a bytes-like object, tuple found"); a
+    # Mapping is required for multipart. No duplicate keys here, so a dict is fine.
+    form = {
+        "model": model,
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+    }
     # Some OpenAI-compatible servers (e.g. Mistral Voxtral) reject the OpenAI-only
     # params — this variant asks for segments their way instead.
-    form_compat = [("model", model), ("timestamp_granularities", "segment")]
+    form_compat = {"model": model, "timestamp_granularities": "segment"}
     if language:
-        form.append(("language", language))
-        form_compat.append(("language", language))
+        form["language"] = language
+        form_compat["language"] = language
 
     audio_path = Path(audio_path)
     if audio_path.stat().st_size > MAX_UPLOAD_BYTES:

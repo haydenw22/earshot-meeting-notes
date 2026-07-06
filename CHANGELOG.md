@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.22.1] — 2026-07-03 · Fix online transcription (Groq / OpenAI / Mistral)
+
+### Fixed
+
+- Transcribing with an online provider (Groq, OpenAI or Mistral) crashed with "sequence item 1: expected a bytes-like object, tuple found" and never uploaded the audio. The upload form is now built in the shape newer httpx requires, so online transcription — including re-transcribing a meeting when the home Whisper server is unreachable — works. A regression test now exercises the real upload encoder so this can't silently break again.
+
 ## [0.22.0] — 2026-07-03 · Sidebar projects polish
 
 ### Changed

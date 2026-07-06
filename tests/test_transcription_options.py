@@ -63,10 +63,10 @@ def main() -> int:
     calls = []
 
     def fake_post(url, headers=None, data=None, files=None, timeout=None):
-        calls.append(list(data))
+        calls.append(dict(data))
         # first (OpenAI-style) form is rejected like Mistral does; the compat
         # retry must succeed and carry Mistral-style timestamp_granularities
-        if any(k == "response_format" for k, _v in data):
+        if "response_format" in data:
             return _Resp(422)
         return _Resp(200, {"text": "hello there",
                            "segments": [{"start": 0.0, "end": 1.2, "text": "hello there"}]})
@@ -81,8 +81,8 @@ def main() -> int:
         check("retry produced a transcript", result["text"] == "hello there")
         check("two attempts made", len(calls) == 2)
         check("second attempt drops OpenAI-only params",
-              not any(k == "response_format" for k, _v in calls[1])
-              and ("timestamp_granularities", "segment") in calls[1])
+              "response_format" not in calls[1]
+              and calls[1].get("timestamp_granularities") == "segment")
 
         calls.clear()
 
@@ -94,6 +94,21 @@ def main() -> int:
         oc.transcribe(small, base_url="https://api.groq.com/openai/v1", api_key="k",
                       model="whisper-large-v3-turbo")
         check("flac gets audio/flac mime", calls[0] == ("a.flac", "audio/flac"))
+
+        print("== httpx really encodes the upload (regression: list data crashed Groq) ==")
+
+        def encoding_post(url, headers=None, data=None, files=None, timeout=None):
+            # Run httpx's REAL multipart encoder — the stubs above never do, which
+            # is exactly how the bug shipped. httpx 0.28 rejects a list-of-tuples
+            # `data=` alongside `files=` ("sequence item N: expected a bytes-like
+            # object, tuple found"); a dict encodes cleanly. .read() forces it.
+            oc.httpx.Request("POST", url, headers=headers or {}, data=data, files=files).read()
+            return _Resp(200, {"text": "enc", "segments": []})
+
+        oc.httpx.post = encoding_post
+        enc = oc.transcribe(small, base_url="https://api.groq.com/openai/v1", api_key="k",
+                            model="whisper-large-v3-turbo")
+        check("groq form encodes as real multipart without error", enc["text"] == "enc")
     finally:
         oc.httpx.post = orig_post
 
