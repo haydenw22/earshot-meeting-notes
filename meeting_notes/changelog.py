@@ -19,6 +19,17 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.23.1", "2026-07-06", "Header icon alignment",
+        (
+            ("Fixed", (
+                "The collapse chevrons and ⋮ menu buttons on the home page (To do card, "
+                "Meetings header, and each meeting row) were pushed into a corner of their "
+                "button instead of centred — they now sit properly centred in their tap "
+                "targets with even spacing.",
+            )),
+        ),
+    ),
+    Release(
         "0.23.0", "2026-07-06", "Collapsible meeting list",
         (
             ("Added", (

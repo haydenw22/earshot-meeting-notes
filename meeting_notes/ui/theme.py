@@ -187,6 +187,10 @@ QPushButton[variant="ghost"]:hover {{ background-color: {t['surface_hover']}; co
 QPushButton[variant="ghost"]:pressed {{ background-color: {t['surface_press']}; }}
 QPushButton[variant="ghost"]:checked {{ background-color: {t['primary_soft']}; color: {t['primary']}; }}
 QPushButton[variant="ghost"]:disabled {{ color: {t['text_faint']}; background-color: transparent; }}
+/* small fixed-size icon buttons (card-header kebabs / collapse chevrons): the
+   ghost variant left-aligns + pads for nav rows, which shoves a lone icon into
+   a corner — centre it in its tap target. Placed AFTER ghost so it wins. */
+QPushButton[iconbtn="true"] {{ padding: 0px; text-align: center; }}
 
 /* round icon-only buttons (rail) */
 QToolButton {{

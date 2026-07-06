@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.23.1] — 2026-07-06 · Header icon alignment
+
+### Fixed
+
+- The collapse chevrons and ⋮ menu buttons on the home page (To do card, Meetings header, and each meeting row) were pushed into a corner of their button instead of centred — they now sit properly centred in their tap targets with even spacing.
+
 ## [0.23.0] — 2026-07-06 · Collapsible meeting list
 
 ### Added
