@@ -1,64 +1,91 @@
+<div align="center">
+
+<img src="docs/logo.svg" width="72" alt="Earshot logo">
+
 # Earshot
 
-**A local-first meeting recorder and AI note-taker for Windows. No bot joins
-your call, and no cloud touches your audio unless you choose one.**
+**AI meeting notes. No bot in your call.**
 
-Earshot records a meeting on **two separate channels** — your microphone ("me")
-and your system audio ("them") — then:
+A local-first meeting recorder and AI note-taker for Windows — it records both
+sides of any call on your PC, transcribes them, and writes the notes, action
+items and answers. Nothing joins your meeting, and no cloud touches your audio
+unless you choose one.
 
-1. (optionally) cancels the echo of *their* audio out of *your* mic so nothing is
-   double-recorded, while keeping your voice when you talk over someone;
-2. transcribes on **your own Whisper server** (or Deepgram / any OpenAI-compatible
-   API, if you opt into a cloud);
-3. merges the two channels into one speaker-labelled transcript — the speaker
-   label is ground truth, no diarization guesswork;
-4. writes structured notes with Claude: title, summary, action items, sections.
+[![Latest release](https://img.shields.io/github/v/release/haydenw22/earshot-meeting-notes?label=download&color=6366F1)](https://github.com/haydenw22/earshot-meeting-notes/releases/latest)
+[![CI](https://github.com/haydenw22/earshot-meeting-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/haydenw22/earshot-meeting-notes/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/haydenw22/earshot-meeting-notes?color=22C55E)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)](https://github.com/haydenw22/earshot-meeting-notes/releases/latest)
+[![Website](https://img.shields.io/badge/web-tryearshot.app-A855F7)](https://tryearshot.app)
 
-Because the capture is channel-based, there is **no bot participant** in your
-meetings — nothing for Teams to block, nothing for clients to side-eye.
+<img src="docs/screenshots/home_dark.png" width="850" alt="Earshot home — meetings, projects and the to-do rail">
 
-## Features
+</div>
 
-- Dual-channel recording with offline WebRTC AEC3 echo cancellation
-- Transcription providers: self-hosted `whisper-asr-webservice`, Deepgram, or any
-  OpenAI-compatible audio API — with VAD skip-silence for dual-channel speed
-- Structured AI notes with per-meeting-type **templates** and global **custom
-  instructions**; one-click saved **AI actions** (e.g. draft the follow-up email)
-- **Ask your meetings**: natural-language Q&A across every meeting, with
-  citations verified verbatim against the transcripts
-- Cross-meeting **pending action items** dashboard; full-text search over
-  transcripts, notes, attendees and agendas
-- **Bookmarks** while recording, talk-time analytics, screen-capture context
-  screenshots, import of existing audio/video files
-- Always-on-top **recording overlay** (REC dot, timer, per-channel level lights)
-- Live "no input detected" warning; crash recovery salvages interrupted
-  recordings on the next launch
-- **Webhook**: POST each finished meeting as JSON into your own automation
-- Clean rich-text copy (pastes perfectly into Notion / email), light + dark UI
+## Get it
 
-## Requirements
+- **[Download the installer](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/EarshotSetup.exe)**
+  (Windows 10/11, 64-bit). SmartScreen may warn — the installer is new and
+  unsigned; it's built from the source in this repo. *More info → Run anyway.*
+- A first-run **setup guide** walks you through the choice:
+  - **Self-host — free forever.** Bring your own keys (Groq's free tier
+    transcribes generously; any Anthropic / OpenAI-compatible / local model
+    writes the notes) or point it at your own Whisper server.
+  - **[Earshot Plus](https://tryearshot.app/pricing)** — managed transcription
+    + AI, zero keys, zero setup. $15/month, 7-day free trial. It's how the
+    project pays for itself.
 
-- Windows 10/11, **Python 3.12** (wheels for the audio/Qt stack are reliable there).
-- A transcription source (configured in Settings — nothing is preconfigured):
-  - **Home server:** a reachable `onerahmet/openai-whisper-asr-webservice`
-    container (e.g. `http://<your-server-ip>:9000`). Use `ASR_ENGINE=faster_whisper`
-    to unlock VAD skip-silence.
-  - **or Deepgram**, **or** any OpenAI-compatible API (OpenAI `whisper-1`, Groq
-    `whisper-large-v3`).
-- An Anthropic API key for note generation (transcription works without it).
+## Why Earshot
 
-## Setup
+Every mainstream meeting-notes tool either sends a **bot** into your call
+(awkward, blockable, sometimes against policy) or streams your **audio to
+their cloud**. Earshot does neither:
+
+- It records on **two separate channels** right on your PC — your microphone
+  ("me") and the system audio ("them"). Works with Zoom, Teams, Meet, Webex, a
+  softphone — anything you can hear.
+- Speaker attribution is **ground truth**, not diarization guesswork — your
+  voice and theirs are physically separate recordings.
+- Echo cancellation (WebRTC AEC3, offline) removes *their* voice from *your*
+  mic when you're on speakers, without ducking you when you talk over someone.
+- Multi-hour meetings are split at quiet moments, transcribed (in parallel on
+  cloud providers) and stitched back together automatically.
+
+## What you get
+
+| | |
+|---|---|
+| <img src="docs/screenshots/detail_light.png" alt="Meeting notes with action-item suggestions and due dates"> | **Notes that end with action.** A tight summary, the decisions, and action-item *suggestions* you approve, edit or dismiss — with due dates filled only when the meeting actually named one. Open items from every meeting roll up into one to-do list. |
+| <img src="docs/screenshots/home_light.png" alt="Light theme home"> | **Organised the way you work.** Colour-coded projects, drag-and-drop filing, full-text search, pre-meeting briefs built from your past meetings, and a light/dark theme that follows your taste. |
+| <img src="docs/screenshots/integrations_light.png" alt="Integrations — Todoist and webhooks"> | **Plays well with your tools.** One-click action items → Todoist (due dates included), a webhook that POSTs finished meetings anywhere Zapier/Make can reach, and clean rich-text copy that pastes perfectly into Notion or email. |
+
+And the rest: **Ask Earshot** natural-language Q&A across every meeting with
+citations verified verbatim against the transcripts · call detection that
+offers to record when a meeting app starts using your mic · an always-on-top
+recording overlay with per-channel level lights · bookmarks while recording ·
+talk-time analytics · optional screen-capture context · import of existing
+audio/video · crash-safe recording with automatic salvage · a "no input
+detected" warning before you waste an hour.
+
+## Self-host quickstart (from source)
+
+Requirements: Windows 10/11, **Python 3.12**.
 
 ```sh
 py -3.12 -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.lock.txt   # pinned, known-good
-# (or `-r requirements.txt` for the loose ranges)
 .venv/Scripts/python main.py
 ```
 
-On first launch: **Settings → Transcription** (pick a source, *Test connection*),
-then **Settings → AI** (Anthropic key or `ANTHROPIC_API_KEY` env var). Then
-**New recording** → pick mic + output device → **Start**.
+The setup guide runs on first launch. For transcription, point it at one of:
+
+- your own [`whisper-asr-webservice`](https://github.com/ahmetoner/whisper-asr-webservice)
+  container (`ASR_ENGINE=faster_whisper` unlocks VAD skip-silence),
+- **Groq** / **OpenAI** / any OpenAI-compatible audio API,
+- **Deepgram**.
+
+Notes/Q&A take an Anthropic key, any OpenAI-compatible endpoint, or a fully
+local model (Ollama, LM Studio) — on that setup your meetings never leave your
+machine.
 
 ## Security & privacy
 
@@ -67,62 +94,64 @@ version:
 
 - **Local by default.** Audio, transcripts, notes and the SQLite library live
   under `%LOCALAPPDATA%\Earshot\`. Nothing leaves your machine except the
-  transcription/AI providers **you** configure and the optional webhook.
-- **Keys are stored in plaintext** in `%LOCALAPPDATA%\Earshot\config.json`
-  (like most local dev tools). Prefer the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
-  / `DEEPGRAM_API_KEY` environment variables on shared machines.
-- **LAN Whisper is plain HTTP** and unauthenticated by default — run it on a
-  trusted network or behind a TLS/auth reverse proxy.
-- AI prompts treat meeting content as untrusted data (spoken "prompt injection"
-  is fenced), and AI-generated text is rendered as plain text in the UI.
+  providers **you** configure and the optional webhook.
+- **Keys are stored in plaintext** in `config.json` (like most local dev
+  tools). Prefer the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPGRAM_API_KEY`
+  environment variables on shared machines.
+- **LAN Whisper is plain HTTP** and unauthenticated by default — trusted
+  networks only, or put TLS/auth in front.
+- AI prompts treat meeting content as untrusted data (spoken "prompt
+  injection" is fenced), and AI-generated text renders as plain text in the UI.
 
-## Smoke-test the audio hardware (no GUI)
+## Development
 
 ```sh
+# smoke-test the audio hardware (no GUI)
 .venv/Scripts/python tools/smoke_record.py 4
-```
 
-## Tests
-
-```sh
-.venv/Scripts/python tests/test_core.py          # + the other tests/test_*.py
+# tests — self-contained scripts, no framework needed
+.venv/Scripts/python tests/test_core.py
 QT_QPA_PLATFORM=offscreen .venv/Scripts/python tests/test_ui_smoke.py
 ```
 
-CI runs the full suite on every push/PR (see `.github/workflows/ci.yml`).
-
-## Build the standalone app
-
-One command builds the `.exe`, installs it to `%LOCALAPPDATA%\Programs\Earshot`,
-and creates Desktop + Start Menu shortcuts:
+CI runs the full suite on every push/PR. One command builds the standalone
+app, installs it and creates shortcuts:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "packaging\build_and_install.ps1"
 ```
 
-Optional — a distributable installer: install [Inno Setup](https://jrsoftware.org/isdl.php),
-then `iscc packaging\installer.iss` (after building once with
-`pyinstaller packaging/meeting_notes.spec`).
+Distributable installer: install [Inno Setup](https://jrsoftware.org/isdl.php),
+then `iscc packaging\installer.iss`.
 
-## Project layout
+<details>
+<summary><b>Project layout</b></summary>
 
 ```
 meeting_notes/
   config.py, paths.py, changelog.py
   audio/         devices, capture, writer, calibrate, aec
-  transcription/ whisper_client, openai_client, deepgram_client, service, merge
-  notes/         schema, anthropic_client, actions, render
+  transcription/ whisper_client, openai_client, deepgram_client, earshot_client, service, merge, chunker
+  notes/         schema, anthropic_client, openai_llm, earshot_llm, actions, render, share
   qa/            ask (two-pass Q&A with verified citations)
-  integrations/  webhook
+  integrations/  todoist, webhook
   storage/       db, repository (SQLite + FTS5)
   pipeline/      processing
-  ui/            shell + pages, overlay, theme, workers
+  ui/            shell + pages, onboarding, overlay, theme, workers
 main.py          entry point
 tools/           smoke_record, screenshots
 tests/           self-contained test scripts (no framework needed)
 packaging/       PyInstaller spec + Inno Setup script + build_and_install.ps1
 ```
+</details>
+
+## Version history
+
+Every release is documented in [CHANGELOG.md](CHANGELOG.md) — also visible
+in-app under **Settings → About**.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The desktop app is fully open source; the optional
+[Earshot Plus](https://tryearshot.app) backend (managed transcription/AI,
+accounts, sync) is the paid, closed service that funds development.

@@ -1,0 +1,17 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Earshot">
+  <defs>
+    <linearGradient id="eg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C6BFF"/>
+      <stop offset="1" stop-color="#9A57EA"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="17" fill="url(#eg)"/>
+  <path d="M20 24c0-2.2 1.8-4 4-4h16c2.2 0 4 1.8 4 4v12c0 2.2-1.8 4-4 4H29l-6.4 5.2c-.9.7-2.1 0-2.1-1.1V24z"
+        fill="#fff" fill-opacity=".14" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
+  <g stroke="#fff" stroke-width="2.6" stroke-linecap="round">
+    <line x1="27" y1="30" x2="27" y2="30"/>
+    <line x1="27" y1="27.5" x2="27" y2="32.5"/>
+    <line x1="32" y1="24.5" x2="32" y2="35.5"/>
+    <line x1="37" y1="27.5" x2="37" y2="32.5"/>
+  </g>
+</svg>
