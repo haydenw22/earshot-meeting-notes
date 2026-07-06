@@ -102,6 +102,7 @@ class Config:
     sidebar_side: str = "left"            # "left" | "right"
     show_dashboard: bool = True           # show the pending-action-items dashboard on Home
     dashboard_collapsed: bool = False     # collapsed/expanded state of the to-do card on Home
+    meetings_collapsed: bool = False      # collapsed/expanded state of the Home meeting list
     folders_collapsed: bool = False       # collapsed/expanded state of the sidebar FOLDERS tree
 
     # --- Call detection (prompt to record when another app starts using the mic) ---

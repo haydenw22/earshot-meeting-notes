@@ -4,6 +4,16 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] — 2026-07-06 · Collapsible meeting list
+
+### Added
+
+- The home page's meeting list has a "Meetings" header with a collapse toggle — fold it away to see your whole to-do list without scrolling (handy on vertical monitors, where the to-dos sit below the list). The choice is remembered between sessions.
+
+### Changed
+
+- On narrow windows the stacked layout no longer leaves a large empty gap between the meeting list and the To do card — spare space now falls below the cards instead of between them.
+
 ## [0.22.2] — 2026-07-06 · To-dos stay visible on narrow windows
 
 ### Fixed

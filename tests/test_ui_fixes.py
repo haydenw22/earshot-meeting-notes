@@ -327,6 +327,23 @@ def main() -> int:
     finally:
         hb_home.width = orig_width
 
+    print("-- collapsible Meetings section --")
+    check("meetings_collapsed defaults False", Config().meetings_collapsed is False)
+    hb_home.refresh()
+    check("meeting list visible by default", not hb_home._meetings_host.isHidden())
+    hb_home._toggle_meetings()
+    check("toggle hides the meeting rows", hb_home._meetings_host.isHidden())
+    check("collapse persisted to cfg", hb_cfg.meetings_collapsed is True)
+    hb_home.refresh()
+    check("collapse survives a refresh", hb_home._meetings_host.isHidden())
+    check("hero card still present while collapsed",
+          hb_home._hero_backdrop is not None and not hb_home._hero_card_ref.isHidden())
+    hb_home._toggle_meetings()
+    check("expand shows the rows again", not hb_home._meetings_host.isHidden())
+    reloaded_cfg = Config.load()
+    check("meetings_collapsed round-trips via Config.load",
+          reloaded_cfg.meetings_collapsed is False)
+
     print("-- ElideLabel: long titles shrink instead of forcing the page wide --")
     from meeting_notes.ui.widgets import ElideLabel
     long_title = "A very long meeting title that cannot possibly fit in a narrow meeting row"

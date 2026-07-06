@@ -367,6 +367,7 @@ class HomePage(QWidget):
         self.rail_lay.setContentsMargins(0, 0, 0, 0)
         self.rail_lay.setSpacing(16)
         self.columns.addWidget(self.rail, 0)
+        self._columns_tail = None  # stretch item appended only in stacked mode
 
         self.scroll.setWidget(self.columns_host)
         root.addWidget(self.scroll, 1)
@@ -435,10 +436,20 @@ class HomePage(QWidget):
         has = bool(meetings)
         self.empty.setVisible(not has)
         if has:
+            # collapsible "Meetings" section: hiding the list gives the To do
+            # card the room (esp. stacked narrow layout — no scrolling needed)
+            self.list_lay.addWidget(self._meetings_header(len(shown)))
+            body = QWidget()
+            body_lay = QVBoxLayout(body)
+            body_lay.setContentsMargins(0, 0, 0, 0)
+            body_lay.setSpacing(12)
             if folders:
-                self.list_lay.addWidget(self._chip_row(folders, meetings))
+                body_lay.addWidget(self._chip_row(folders, meetings))
             for m in shown:
-                self.list_lay.addWidget(MeetingRow(m, self.theme, self.repo, self.shell, folders_by_id))
+                body_lay.addWidget(MeetingRow(m, self.theme, self.repo, self.shell, folders_by_id))
+            body.setVisible(not self.cfg.meetings_collapsed)
+            self._meetings_host = body
+            self.list_lay.addWidget(body)
             self.list_lay.addStretch(1)
 
         # right rail
@@ -761,6 +772,48 @@ class HomePage(QWidget):
             self.repo.update(meeting_id, notes_json=json.dumps(notes))
         QTimer.singleShot(0, self.refresh)
 
+    # ---------- collapsible "Meetings" section ----------
+    def _meetings_header(self, n: int) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(6)
+        ic = QLabel()
+        ic.setPixmap(icons.pixmap("file", self.theme.color("primary"), 16))
+        lay.addWidget(ic)
+        t = QLabel("Meetings")
+        t.setObjectName("H3")
+        lay.addWidget(t)
+        cnt = QLabel(f"({n})")
+        cnt.setObjectName("Faint")
+        lay.addWidget(cnt)
+        lay.addStretch(1)
+        chevron = QPushButton()
+        chevron.setProperty("variant", "ghost")
+        chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+        chevron.setFixedSize(28, 28)
+        chevron.clicked.connect(self._toggle_meetings)
+        self._meetings_chevron_btn = chevron
+        lay.addWidget(chevron)
+        self._set_meetings_chevron_icon()
+        return w
+
+    def _toggle_meetings(self) -> None:
+        self.cfg.meetings_collapsed = not self.cfg.meetings_collapsed
+        self.cfg.save()
+        host = getattr(self, "_meetings_host", None)
+        if host is not None:
+            host.setVisible(not self.cfg.meetings_collapsed)
+        self._set_meetings_chevron_icon()
+
+    def _set_meetings_chevron_icon(self) -> None:
+        btn = getattr(self, "_meetings_chevron_btn", None)
+        if btn is None:
+            return
+        collapsed = self.cfg.meetings_collapsed
+        btn.setIcon(self.theme.icon("chevron-right" if collapsed else "chevron-down", "text_muted", 16))
+        btn.setToolTip("Expand meetings" if collapsed else "Collapse meetings")
+
     def _toggle_dashboard(self) -> None:
         self.cfg.dashboard_collapsed = not self.cfg.dashboard_collapsed
         self.cfg.save()
@@ -863,9 +916,20 @@ class HomePage(QWidget):
             self.columns.setDirection(QBoxLayout.Direction.TopToBottom)
             self.rail.setMinimumWidth(0)
             self.rail.setMaximumWidth(16777215)
+            # stacked: the list takes its natural height and any leftover page
+            # space falls BELOW the rail — otherwise a collapsed meeting list
+            # leaves a huge gap between its header and the To do card
+            self.columns.setStretch(0, 0)
+            if self._columns_tail is None:
+                self.columns.addStretch(1)
+                self._columns_tail = self.columns.itemAt(self.columns.count() - 1)
         else:
             self.columns.setDirection(QBoxLayout.Direction.LeftToRight)
             self.rail.setFixedWidth(_RAIL_WIDTH)
+            self.columns.setStretch(0, 1)
+            if self._columns_tail is not None:
+                self.columns.removeItem(self._columns_tail)
+                self._columns_tail = None
         self.rail.setVisible(True)
 
     def resizeEvent(self, event) -> None:
