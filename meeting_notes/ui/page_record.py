@@ -709,6 +709,12 @@ class RecordPage(QWidget):
             self.repo.update(self.meeting_id, attendees=_parse_attendees(self.attendees.text()))
 
     def _stop(self) -> None:
+        # Idle guard: a stale "call ended — Stop & process?" toast (which lives
+        # ~30s) can fire this after the user already stopped. Without the guard
+        # meeting_dir(None) raises and the record button is left disabled on
+        # "Processing…" forever.
+        if self.recorder is None or self.meeting_id is None:
+            return
         self.poll.stop()
         self._stop_screen()
         self._hide_overlay()

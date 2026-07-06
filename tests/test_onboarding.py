@@ -182,6 +182,30 @@ def main() -> int:
           pdlg.stack.currentIndex() == OnboardingDialog.SELF_TR)
     check("own-keys switches the path to selfhost", pdlg._path == "selfhost")
 
+    print("== wizard: a successful Plus sign-in advances to Finish (no soft-lock) ==")
+    # Regression: on the mandatory run, Next and Skip are hidden on the PLUS
+    # page, so a successful sign-in that didn't navigate would strand the user.
+    from meeting_notes.ui import cloud_link as _cl
+
+    class _FakeLinkDialog:
+        def __init__(self, *a, **k):
+            self.linked_ok = True
+
+        def exec(self):
+            return 1
+
+    lcfg = Config()
+    ldlg = OnboardingDialog(None, lcfg, theme, shell=_Shell(), mandatory=True)
+    ldlg._choose("plus")
+    orig_dialog = _cl.CloudLinkDialog
+    _cl.CloudLinkDialog = _FakeLinkDialog
+    try:
+        ldlg._plus_sign_in()
+    finally:
+        _cl.CloudLinkDialog = orig_dialog
+    check("Plus sign-in advances to the Finish page",
+          ldlg.stack.currentIndex() == OnboardingDialog.FINISH)
+
     # ---------------------------------------------------------------
     print("== settings: Transcription + AI tabs hidden in cloud mode, shown in selfhost ==")
     set_repo = new_repo()
@@ -264,23 +288,25 @@ def main() -> int:
     finally:
         _ec.get_me = orig_get_me
 
-    print("== account page: sign-out clears the token + returns to selfhost ==")
+    print("== account page: sign-out clears the token instantly + returns to selfhost ==")
     from meeting_notes.transcription import earshot_client as ec
 
-    # sign-out does a best-effort revoke (no network in tests) + local clear
-    orig_post = ec.httpx.post
-
-    def noop_post(*a, **k):
-        raise ec.httpx.HTTPError("offline")
-
-    ec.httpx.post = noop_post
-    try:
-        apage._sign_out()
-    finally:
-        ec.httpx.post = orig_post
-    check("sign-out clears cloud_token", acfg.cloud_token == "")
+    # Sign-out clears local state SYNCHRONOUSLY and revokes off-thread, so it
+    # never blocks the GUI. Point the base at a closed local port so the
+    # background revoke fails fast (connection refused) instead of touching the
+    # real server, then wait for that worker to finish so no thread leaks.
+    acfg.account_mode = "cloud"
+    acfg.cloud_token = "tok"
+    acfg.cloud_email = "hayden@example.com"
+    acfg.cloud_api_base = "http://127.0.0.1:9"  # unreachable — revoke fails fast
+    apage._sign_out()
+    check("sign-out clears cloud_token immediately", acfg.cloud_token == "")
     check("sign-out returns to selfhost mode", acfg.account_mode == "selfhost")
     check("sign-out re-renders the selfhost pitch", hasattr(apage, "subscribe_btn"))
+    rw = getattr(apage, "_revoke_worker", None)
+    if rw is not None:
+        rw.wait(4000)  # let the best-effort revoke finish (never raises)
+    check("revoke ran off the GUI thread", rw is not None)
     acc_repo.close()
 
     # ---------------------------------------------------------------

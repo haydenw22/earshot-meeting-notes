@@ -147,6 +147,10 @@ class CloudLinkDialog(QDialog):
         name_row.addWidget(name_lbl)
         self.name_edit = QLineEdit(_device_name())
         self.name_edit.setToolTip("How this PC appears in your account's device list")
+        # The code is minted with the device name, so if the user renames the PC
+        # while still waiting to link, re-request a code carrying the new name
+        # (only on an actual change, and only while not yet linked).
+        self.name_edit.editingFinished.connect(self._on_name_edited)
         name_row.addWidget(self.name_edit, 1)
         v.addLayout(name_row)
 
@@ -197,14 +201,23 @@ class CloudLinkDialog(QDialog):
         btn_row.addWidget(self.close_btn)
         v.addLayout(btn_row)
 
+    def _on_name_edited(self) -> None:
+        if self.linked_ok:
+            return
+        if self.name_edit.text().strip() == getattr(self, "_requested_name", None):
+            return  # no real change (e.g. focus lost) — keep the current code
+        self._start_link()
+
     # ---------- linking ----------
     def _start_link(self) -> None:
         self._stop_worker()
+        self._requested_name = self.name_edit.text().strip()
         self.retry_btn.setVisible(False)
         self.open_btn.setEnabled(False)
         self.copy_btn.setEnabled(False)
         self.code_lbl.setText("Contacting Earshot Plus…")
         self.status_lbl.setText("")
+        self.status_lbl.setStyleSheet("")  # clear any prior red failure styling
         self.worker = _LinkWorker(self.cfg.cloud_api_base, self.name_edit.text(), self)
         self.worker.code_ready.connect(self._on_code_ready)
         self.worker.linked.connect(self._on_linked)

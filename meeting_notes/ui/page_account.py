@@ -294,6 +294,11 @@ class AccountPage(QWidget):
         self._me_worker.start()
 
     def _on_me(self, data: dict) -> None:
+        # The fetch can settle AFTER the page rebuilt into self-host mode (e.g.
+        # the user signed out during the ~10s connect window) — the usage
+        # widgets no longer exist. Bail rather than AttributeError in the slot.
+        if not hasattr(self, "usage_bar"):
+            return
         if not isinstance(data, dict):
             self._on_me_failed("offline")
             return
@@ -321,6 +326,8 @@ class AccountPage(QWidget):
             self.usage_lbl.setText(f"Transcription this month: {self._fmt_hours(used)}")
 
     def _on_me_failed(self, _msg: str) -> None:
+        if not hasattr(self, "usage_lbl"):  # page rebuilt while the fetch was in flight
+            return
         self.usage_lbl.setText("Usage unavailable — offline.")
         self.usage_bar.setValue(0)
 
@@ -335,13 +342,24 @@ class AccountPage(QWidget):
         self._open_url(self._billing_url)
 
     def _sign_out(self) -> None:
-        from ..transcription import earshot_client
-        # best-effort server-side revoke; local sign-out happens regardless
-        earshot_client.revoke(self.cfg.cloud_api_base, self.cfg.cloud_token)
+        # Sign out LOCALLY and instantly — the server-side revoke is best-effort
+        # and runs off the GUI thread, so an unreachable server can't freeze the
+        # app (revoke has an 8s connect timeout). Capture the token first.
+        base, token = self.cfg.cloud_api_base, self.cfg.cloud_token
         self.cfg.cloud_token = ""
         self.cfg.cloud_email = ""
         self.cfg.account_mode = "selfhost"
         self.cfg.save()
+        if token:
+            from .workers import FuncWorker
+
+            def job(_progress):
+                from ..transcription import earshot_client
+                earshot_client.revoke(base, token)  # never raises
+                return None
+
+            self._revoke_worker = FuncWorker(job)
+            self._revoke_worker.start()
         if hasattr(self.shell, "on_account_changed"):
             self.shell.on_account_changed()
         self.refresh()

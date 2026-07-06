@@ -95,6 +95,18 @@ def main() -> int:
     check("levels below the active threshold don't count", not page._mic_seen and not page._them_seen)
     check("warning shown for both", shown() and "microphone" in text() and "other side" in text())
 
+    print("== _stop is a no-op when idle (stale call-ended toast can't crash it) ==")
+    # Regression: a stale "call ended — Stop & process?" toast could fire _stop
+    # after the user already stopped; with no recorder that raised in
+    # meeting_dir(None) and left the button stuck disabled on "Processing…".
+    page.recorder = None
+    page.meeting_id = None
+    page.record_btn.setEnabled(True)
+    page.record_btn.setText("Start recording")
+    page._stop()  # must not raise
+    check("idle _stop leaves the record button enabled", page.record_btn.isEnabled())
+    check("idle _stop keeps the Start label", "start" in page.record_btn.text().lower())
+
     repo.close()
     print("\nINPUT-WARNING TESTS PASSED")
     return 0

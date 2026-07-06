@@ -19,6 +19,29 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.28.0", "2026-07-07", "Bug-hunt fixes across the app",
+        (
+            ("Fixed", (
+                "Signing in to Earshot Plus from the first-run setup guide could leave the "
+                "wizard stuck with no way forward — a successful sign-in now advances to the "
+                "finish screen.",
+                "Quitting the app while a transcription, summary or import was still running "
+                "could crash on exit — background work is now stopped cleanly first.",
+                "Dismissing a stale \"call ended\" prompt after you'd already stopped a "
+                "recording could freeze the record button on \"Processing…\" — it's now a no-op.",
+                "Signing out of Earshot Plus is instant and no longer briefly freezes the app "
+                "when the server is unreachable, and can't error if a usage refresh was still "
+                "in flight.",
+                "Earshot Plus transcribes both audio channels in parallel again (it had "
+                "silently gone sequential for cloud accounts, doubling the wait).",
+                "The device name you type when linking a PC is now used even if you edit it "
+                "before entering the code; the code screen no longer stays red after a "
+                "failed-then-successful retry.",
+                "Fixed a memory leak when switching account mode or re-running the setup guide.",
+            )),
+        ),
+    ),
+    Release(
         "0.27.0", "2026-07-07", "Sign-in fixed; named devices",
         (
             ("Fixed", (

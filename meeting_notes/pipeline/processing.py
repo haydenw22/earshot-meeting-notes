@@ -88,8 +88,12 @@ def _transcribe_channels(me_path: Path, them_path: Path, cfg: Config, progress: 
     """Transcribe both channels. Cloud providers are massively parallel, so the
     two channels go out CONCURRENTLY (≈ halves wall-clock time); the home server
     serialises on one model lock, so it stays sequential (parallel = no gain,
-    messier progress)."""
-    if cfg.transcription_provider == "home":
+    messier progress). Earshot Plus (cloud mode) routes through the managed
+    proxy regardless of transcription_provider, so it's parallel too — checking
+    only transcription_provider would wrongly serialise every Plus user (their
+    field stays at the default 'home')."""
+    is_home_server = cfg.account_mode != "cloud" and cfg.transcription_provider == "home"
+    if is_home_server:
         progress("Transcribing you")
         me_json = transcription_service.transcribe(me_path, cfg, progress=progress)
         progress("Transcribing them")

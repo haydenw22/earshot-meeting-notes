@@ -25,6 +25,20 @@ def active_count() -> int:
     return len(_ACTIVE)
 
 
+def join_all(timeout_ms: int = 5000) -> None:
+    """Block until every active worker has finished (or the timeout elapses),
+    called on app close so the interpreter never exits with a live QThread —
+    which Qt aborts with STATUS_STACK_BUFFER_OVERRUN (0xC0000409). Best-effort:
+    a wedged worker is terminated as a last resort so quit still completes."""
+    for w in list(_ACTIVE):
+        try:
+            if w.isRunning() and not w.wait(timeout_ms):
+                w.terminate()
+                w.wait(1000)
+        except RuntimeError:
+            pass  # already deleted — fine
+
+
 class FuncWorker(QThread):
     progress = Signal(str)
     done = Signal(object)

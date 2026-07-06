@@ -1175,4 +1175,9 @@ class Shell(QMainWindow):
                 event.ignore()
                 return
         self.record._hide_overlay()  # don't leave the floating overlay behind
+        # Join background FuncWorkers before the interpreter tears down — exiting
+        # with a live QThread aborts the process (0xC0000409) instead of a clean
+        # quit. This covers the transcription/summary/import/finalise workers the
+        # guard above warns about.
+        workers.join_all()
         event.accept()

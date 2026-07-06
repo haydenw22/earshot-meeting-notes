@@ -80,6 +80,15 @@ class SettingsPage(QWidget):
         """(Re)build the tab set for the current account mode. In cloud mode the
         Transcription and AI tabs are hidden — Earshot Plus manages both, so
         there's nothing to configure — leaving General / Audio / About."""
+        # clear() detaches the old pages but never destroys them — they stay
+        # alive parented under the tab widget's internal stack, so every
+        # sign-in/out and "Run setup guide again" leaked ~one full tab set.
+        # Delete them explicitly.
+        for i in range(self.tabs.count()):
+            w = self.tabs.widget(i)
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
         self.tabs.clear()
         self._cloud_mode = self.cfg.account_mode == "cloud"
         self.tabs.addTab(self._general_tab(), "General")

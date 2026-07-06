@@ -494,7 +494,11 @@ class OnboardingDialog(QDialog):
         dlg = CloudLinkDialog(self, self.cfg, self.theme, on_linked=self._on_plus_linked)
         dlg.exec()
         if dlg.linked_ok:
+            # Advance to Finish. Without this the user is stranded: on the
+            # mandatory first run Next AND Skip are hidden on the Plus page, so
+            # a successful sign-in would otherwise soft-lock the wizard.
             self.plus_status.setText("Signed in to Earshot Plus.")
+            self._show_page(self.FINISH)
 
     def _on_plus_linked(self, _data: dict) -> None:
         if self.shell is not None and hasattr(self.shell, "on_account_changed"):
