@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.25.1] — 2026-07-06 · Scroll-safe settings
+
+### Fixed
+
+- Scrolling a settings page (or the record/integrations pages) no longer changes whatever the wheel passes over — overlay opacity, model pickers, device dropdowns. The wheel scrolls the page; a control only responds to the wheel after you click into it.
+
 ## [0.25.0] — 2026-07-06 · Mandatory setup guide & sidebar overhaul
 
 ### Changed

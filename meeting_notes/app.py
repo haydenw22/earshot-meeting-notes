@@ -30,6 +30,31 @@ def _app_icon() -> QIcon:
     return QIcon(logo.logo_pixmap(256))
 
 
+def _setup_replay_flag() -> str:
+    """Path of the one-shot 'replay the setup guide' flag file, next to the exe
+    (frozen) or the repo root (dev). A deploy can drop this file to make the
+    NEXT launch run the first-run wizard once — with all user data untouched.
+    The install dir is used (not the data dir) because deploy tooling reliably
+    writes there."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, "run_setup_once.flag")
+
+
+def _consume_replay_flag() -> bool:
+    """True (once) if the replay flag exists; deletes it so it can't loop."""
+    flag = _setup_replay_flag()
+    if not os.path.exists(flag):
+        return False
+    try:
+        os.remove(flag)
+    except OSError:
+        return False  # never risk a wizard-every-launch loop from a stuck flag
+    return True
+
+
 def _set_windows_app_id() -> None:
     """Give Earshot its own taskbar identity so Windows uses our icon for the
     taskbar button (and pins/groups it correctly) rather than a generic one."""
@@ -68,7 +93,8 @@ def run() -> int:
     # First run: the setup wizard is MANDATORY and runs before the main window
     # exists on screen — no app in the background, no way to dismiss it without
     # finishing. (Skipped headless: tests/CI have no user to walk through it.)
-    if not cfg.onboarding_done and not Shell._headless():
+    # A deploy-dropped run_setup_once.flag replays it exactly once.
+    if not Shell._headless() and (_consume_replay_flag() or not cfg.onboarding_done):
         from .ui.onboarding import OnboardingDialog
 
         wizard = OnboardingDialog(None, cfg, theme, shell=window, mandatory=True)

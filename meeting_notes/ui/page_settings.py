@@ -29,7 +29,7 @@ from ..audio import devices as dev
 from ..capture import screen as screen_capture
 from ..transcription import whisper_client
 from .named_list import NamedListManager
-from .widgets import Card
+from .widgets import Card, calm_scroll_children
 
 # One-click fills for the OpenAI-compatible transcription provider.
 # (label, base_url, model) — prices as of mid-2026, shown for orientation.
@@ -88,6 +88,10 @@ class SettingsPage(QWidget):
             self.tabs.addTab(self._transcription_tab(), "Transcription")
             self.tabs.addTab(self._ai_tab(), "AI")
         self.tabs.addTab(self._about_tab(), "About")
+        # scrolling the page must never change a control it passes over.
+        # Sweep self.tabs (not self): at initial build the tab widget isn't
+        # parented into the page yet, so findChildren(self) would find nothing.
+        calm_scroll_children(self.tabs)
 
     def refresh_tabs(self) -> None:
         """Rebuild the tabs after the account mode changes (sign in / out), so the

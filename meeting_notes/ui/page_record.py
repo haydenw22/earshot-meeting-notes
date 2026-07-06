@@ -37,7 +37,7 @@ from ..paths import meeting_dir
 from ..util.dates import today_pair
 from . import icons
 from .overlay import RecordingOverlay
-from .widgets import Card
+from .widgets import Card, calm_scroll_children
 from .workers import FuncWorker
 
 # A channel whose RMS level never crosses this is treated as silent (a muted mic
@@ -173,6 +173,8 @@ class RecordPage(QWidget):
         self.overlay: RecordingOverlay | None = None
         self._human_date, self._iso_date = today_pair()
         self._build()
+        # scrolling the page must never change a combo it passes over
+        calm_scroll_children(self)
 
     # ---------- layout ----------
     def _build(self) -> None:

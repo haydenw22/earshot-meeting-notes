@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from PySide6.QtCore import QDate, QSize, Qt
+from PySide6.QtCore import QDate, QEvent, QObject, QSize, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCalendarWidget,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -16,7 +18,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -74,6 +78,47 @@ class ElideLabel(QLabel):
         shown = fm.elidedText(self._full, Qt.TextElideMode.ElideRight, max(24, self.width()))
         super().setText(shown)
         self.setToolTip(self._full if shown != self._full else "")
+
+
+class _CalmWheelFilter(QObject):
+    """Scrolling a settings page must never CHANGE a control it passes over.
+
+    Without this, a wheel over any combo/slider/spinbox silently rewrites the
+    value (model, overlay opacity, …) instead of scrolling the page. With it,
+    an unfocused control forwards the gesture to the enclosing QScrollArea;
+    the wheel only adjusts a control after the user clicks into it."""
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.Wheel and not obj.hasFocus():
+            area = None
+            p = obj.parentWidget()
+            while p is not None:
+                if isinstance(p, QScrollArea):
+                    area = p
+                    break
+                p = p.parentWidget()
+            if area is not None:
+                bar = area.verticalScrollBar()
+                # ~60px per wheel notch — close to native page scrolling
+                bar.setValue(bar.value() - int(event.angleDelta().y() * 0.5))
+            return True  # the control never sees the wheel
+        return False
+
+
+_calm_wheel = _CalmWheelFilter()
+
+
+def calm_scroll(widget) -> None:
+    """Make one control scroll-safe (see _CalmWheelFilter)."""
+    widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    widget.installEventFilter(_calm_wheel)
+
+
+def calm_scroll_children(root) -> None:
+    """Sweep a page: every combo/slider/spinbox under `root` becomes scroll-safe."""
+    for kind in (QComboBox, QSlider, QAbstractSpinBox):  # findChildren: one type per call
+        for w in root.findChildren(kind):
+            calm_scroll(w)
 
 
 def make_chip(text: str, *, fg: str, bg: str) -> QLabel:

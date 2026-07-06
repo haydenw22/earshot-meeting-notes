@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons
-from .widgets import Card, make_chip
+from .widgets import Card, calm_scroll_children, make_chip
 
 # Connectors previewed in the "More coming soon" card: (icon name, display name,
 # one-line description). Kept short and honest — nothing here is wired up yet.
@@ -40,6 +40,8 @@ class IntegrationsPage(QWidget):
         self.cfg = cfg
         self.theme = theme
         self._build()
+        # scrolling the page must never change a control it passes over
+        calm_scroll_children(self)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)

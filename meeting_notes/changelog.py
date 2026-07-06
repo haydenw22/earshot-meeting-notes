@@ -19,6 +19,17 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.25.1", "2026-07-06", "Scroll-safe settings",
+        (
+            ("Fixed", (
+                "Scrolling a settings page (or the record/integrations pages) no longer "
+                "changes whatever the wheel passes over — overlay opacity, model pickers, "
+                "device dropdowns. The wheel scrolls the page; a control only responds to "
+                "the wheel after you click into it.",
+            )),
+        ),
+    ),
+    Release(
         "0.25.0", "2026-07-06", "Mandatory setup guide & sidebar overhaul",
         (
             ("Changed", (

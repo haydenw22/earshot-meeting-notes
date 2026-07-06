@@ -283,6 +283,52 @@ def main() -> int:
     check("sign-out re-renders the selfhost pitch", hasattr(apage, "subscribe_btn"))
     acc_repo.close()
 
+    # ---------------------------------------------------------------
+    print("== settings/record: scrolling never changes an unfocused control ==")
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QComboBox, QSlider
+
+    def wheel_down(w):
+        ev = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120),
+                         Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                         Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(w, ev)
+
+    calm_repo = new_repo()
+    ccfg2 = Config()
+    cpage = SettingsPage(_Shell(), calm_repo, ccfg2, theme)
+    app.processEvents()
+    combos = cpage.findChildren(QComboBox)
+    sliders = cpage.findChildren(QSlider)
+    check("settings page has combos to protect", len(combos) >= 1)
+    check("settings page has the opacity slider", len(sliders) >= 1)
+    target = next(c for c in combos if c.count() >= 2)
+    target.setCurrentIndex(0)
+    wheel_down(target)
+    check("wheel over an unfocused combo does NOT change it", target.currentIndex() == 0)
+    sl = sliders[0]
+    sl.setValue(sl.maximum())
+    before = sl.value()
+    wheel_down(sl)
+    check("wheel over an unfocused slider does NOT change it", sl.value() == before)
+    check("combos no longer grab focus via the wheel",
+          all(c.focusPolicy() == Qt.FocusPolicy.StrongFocus for c in combos))
+    calm_repo.close()
+
+    print("== app: one-shot setup-replay flag ==")
+    from meeting_notes import app as app_mod
+
+    flag = app_mod._setup_replay_flag()
+    check("replay flag lives next to the app, named run_setup_once.flag",
+          flag.endswith("run_setup_once.flag"))
+    check("no flag -> no replay", app_mod._consume_replay_flag() is False)
+    with open(flag, "w", encoding="utf-8") as fh:
+        fh.write("1")
+    check("flag present -> replay once", app_mod._consume_replay_flag() is True)
+    check("flag consumed (deleted) after replay", not os.path.exists(flag))
+    check("second launch -> no replay again", app_mod._consume_replay_flag() is False)
+
     print("\nONBOARDING TESTS PASSED")
     return 0
 
