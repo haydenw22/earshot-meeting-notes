@@ -19,6 +19,16 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.29.2", "2026-07-07", "Help button fixed",
+        (
+            ("Fixed", (
+                "The sidebar Help button did nothing in 0.29.1: an internal error "
+                "stopped its menu from opening. It pops up reliably again, and a test "
+                "now clicks the real button so this can't quietly break twice.",
+            )),
+        ),
+    ),
+    Release(
         "0.29.1", "2026-07-07", "Icon rail, friendlier dates, snappier About",
         (
             ("Changed", (

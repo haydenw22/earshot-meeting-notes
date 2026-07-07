@@ -461,15 +461,14 @@ class Shell(QMainWindow):
         self._active_project = ("folder", folder_id)
         self._set_active("project")
 
-    def _open_help_menu(self, anchor=None) -> None:
-        """The Help button (sidebar or collapsed rail): a small menu popping up
-        above the button, Wispr-style — the Help Center guide, the full release
-        history on GitHub, and outside links."""
+    def _build_help_menu(self) -> QMenu:
+        """The Help menu contents — the Help Center guide, the full release
+        history on GitHub, and outside links. Split from _open_help_menu so
+        tests can inspect the actions without executing a blocking menu."""
         import webbrowser
 
         from .page_help import CHANGELOG_URL, ISSUES_URL, WEBSITE_URL
 
-        anchor = anchor if anchor is not None else self.help_btn
         menu = QMenu(self)
         c = self.theme.color("text_muted")
 
@@ -487,9 +486,22 @@ class Shell(QMainWindow):
                        lambda: _open(WEBSITE_URL))
         menu.addAction(icons.icon("alert-triangle", c, 16), "Report an issue",
                        lambda: _open(ISSUES_URL))
+        return menu
+
+    def _open_help_menu(self, anchor=None) -> None:
+        """Pop the Help menu above its button (sidebar or collapsed rail).
+
+        This is wired straight to clicked(bool), so `anchor` can arrive as a
+        BOOL — v0.29.1 shipped with `anchor is not None` here, which made the
+        sidebar Help button crash on False.mapToGlobal() and do nothing.
+        Anything that isn't a widget means "anchor to the sidebar button"."""
+        if not isinstance(anchor, QWidget):
+            anchor = self.help_btn
+        menu = self._build_help_menu()
         pos = anchor.mapToGlobal(QPoint(0, 0))
         pos.setY(pos.y() - menu.sizeHint().height() - 6)
-        menu.exec(pos)
+        self._help_menu = menu  # popup() is non-blocking: keep the menu alive
+        menu.popup(pos)
 
     def on_account_changed(self) -> None:
         """Called after signing in to / out of Earshot Plus: rebuild the Settings

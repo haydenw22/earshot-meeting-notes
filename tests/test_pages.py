@@ -114,6 +114,28 @@ def main() -> int:
     check("help page exists", hasattr(shell, "help"))
     check("collapse button exists", hasattr(shell, "collapse_btn"))
 
+    print("== shell: clicking Help actually opens the menu (v0.29.1 regression) ==")
+    # clicked(bool) passes False into the anchor param — this used to raise
+    # inside the slot (False.mapToGlobal) and the menu silently never appeared
+    shell.help_btn.click()
+    app.processEvents()
+    menu = getattr(shell, "_help_menu", None)
+    check("help menu exists after clicking the button", menu is not None)
+    check("help menu is visible", menu is not None and not menu.isHidden())
+    texts = [a.text() for a in menu.actions() if a.text()]
+    for entry in ("Help Center", "What's new", "Visit tryearshot.app", "Report an issue"):
+        check(f"help menu lists '{entry}'", entry in texts)
+    menu.close()
+    app.processEvents()
+
+    # the collapsed rail's Help button anchors to itself and must work too
+    shell.rail_help_btn.click()
+    app.processEvents()
+    menu2 = getattr(shell, "_help_menu", None)
+    check("rail help button opens the menu too", menu2 is not None and not menu2.isHidden())
+    menu2.close()
+    app.processEvents()
+
     print("== shell: sidebar collapses to the icon rail and back, persisted to cfg ==")
     check("sidebar starts visible", not shell.sidebar.isHidden())
     check("icon rail starts hidden", shell.rail.isHidden())
