@@ -66,9 +66,15 @@ def main() -> int:
     shell.show_home(); app.processEvents()
     assert shell.home.cfg.show_dashboard       # dashboard enabled; pending "Write docs" renders
 
-    # full-text search across content (not just titles)
-    shell._filter_list("objection")            # no body match — must not crash
-    shell._filter_list("hello"); app.processEvents()
+    # full-text search opens results in the main window (project page)
+    shell.search.setText("objection")          # no body match — must not crash
+    shell._run_search(); app.processEvents()
+    shell.search.setText("hello")
+    shell._run_search(); app.processEvents()
+    assert shell.stack.currentWidget() is shell.project
+    assert shell.project.mode == ("search", "hello")
+    shell.search.setText("")
+    shell._run_search(); app.processEvents()
 
     # settings save round-trips the new fields
     shell.show_settings(); app.processEvents()
@@ -81,18 +87,22 @@ def main() -> int:
     assert reloaded.show_dashboard is False
     assert reloaded.custom_instructions == "Use British English."
 
-    # webhook now lives on the Integrations page (moved out of Settings -> General
-    # in Phase D) — same round-trip check, new home
+    # webhook lives on the Integrations pane inside Settings — same round-trip
+    # check, new home
     shell.show_integrations(); app.processEvents()
-    assert shell.stack.currentWidget() is shell.integrations
+    assert shell.stack.currentWidget() is shell.settings
+    assert shell.settings._current_key == "integrations"
     shell.integrations.webhook_url.setText("https://example.com/hook")
     shell.integrations._save(); app.processEvents()
     reloaded2 = Config.load()
     assert reloaded2.webhook_url == "https://example.com/hook"
 
-    # Account page switches the stack too
+    # Account routes into Settings too, and the Help page shows
     shell.show_account(); app.processEvents()
-    assert shell.stack.currentWidget() is shell.account
+    assert shell.stack.currentWidget() is shell.settings
+    assert shell.settings._current_key == "account"
+    shell.show_help(); app.processEvents()
+    assert shell.stack.currentWidget() is shell.help
 
     theme.toggle(); app.processEvents()      # light -> dark, refresh all pages
     shell.show_home(); app.processEvents()

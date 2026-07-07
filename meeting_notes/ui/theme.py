@@ -289,6 +289,47 @@ QTabBar::tab:selected {{ color: {t['primary']}; border-bottom: 2px solid {t['pri
 QTabBar::tab:hover {{ color: {t['text']}; }}
 QTabBar::tab:disabled {{ color: {t['text_faint']}; }}
 
+/* ---------- settings: left nav rail + panes ---------- */
+#SettingsNav {{
+    background-color: {t['surface_alt']};
+    border-right: 1px solid {t['border']};
+}}
+#SettingsNav QPushButton[variant="ghost"] {{
+    padding: 8px 12px;
+    font-size: 13px;
+}}
+
+/* ---------- sidebar status card (trial / renew prompt) ---------- */
+#StatusCard {{
+    background-color: {t['primary_soft']};
+    border: 1px solid {t['border']};
+    border-radius: 14px;
+}}
+
+/* ---------- plans & billing ---------- */
+#PlanBanner {{
+    background-color: {t['primary_soft']};
+    border: 1px solid {t['border']};
+    border-radius: 14px;
+}}
+#PlanCard {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 16px;
+}}
+#PlanCard[current="true"] {{ border: 1px solid {t['primary']}; }}
+#PlanPrice {{ font-family: {FONT_DISPLAY}; font-size: 22px; font-weight: 700; color: {t['text']}; }}
+#PlanKicker {{ color: {t['text_faint']}; font-size: 12px; font-weight: 600; }}
+
+/* floating expand button shown when the sidebar is collapsed */
+QToolButton#SidebarExpand {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 10px;
+    padding: 5px;
+}}
+QToolButton#SidebarExpand:hover {{ background-color: {t['surface_hover']}; }}
+
 /* ---------- text views ---------- */
 QTextBrowser, QTextEdit {{
     background-color: {t['surface']};

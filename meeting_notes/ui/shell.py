@@ -5,299 +5,39 @@ navigation and broadcasts theme changes to every page.
 from __future__ import annotations
 
 from PySide6.QtCore import (
-    Property,
-    QEasingCurve,
     QEvent,
-    QMimeData,
     QPoint,
-    QPropertyAnimation,
-    QRectF,
-    QSize,
     Qt,
     QTimer,
-    Signal,
 )
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import __version__
 from . import icons, logo
 from .folder_dialog import ask_new_folder, ask_rename_folder
-from .page_account import AccountPage
 from .page_ask import AskPage
 from .page_detail import DetailPage
+from .page_help import HelpPage
 from .page_home import HomePage
-from .page_integrations import IntegrationsPage
+from .page_project import ProjectPage
 from .page_record import RecordPage
 from .page_settings import SettingsPage
 from .widgets import FOLDER_COLORS
-
-_MEETING_MIME = "application/x-earshot-meeting"
-
-
-class _MeetingList(QListWidget):
-    """The unfiled-meetings list — draggable onto a folder in the tree above,
-    and a valid drop target for a meeting dragged out of a folder (= unfile).
-
-    Content-sized like _FolderTree: it lives with the projects tree inside ONE
-    sidebar scroll column, so it reports its content height instead of
-    scrolling internally (twin cramped scrollbars was the failure mode)."""
-
-    meeting_dropped = Signal(int, object)  # meeting_id, folder_id (always None here)
-
-    _MIN_H = 34  # ~one row
-
-    def __init__(self):
-        super().__init__()
-        self._content_h = self._MIN_H
-        pol = self.sizePolicy()
-        pol.setVerticalPolicy(QSizePolicy.Policy.Preferred)
-        self.setSizePolicy(pol)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-    def set_content_height(self, h: int) -> None:
-        h = max(self._MIN_H, h)
-        if h != self._content_h:
-            self._content_h = h
-            self.setMaximumHeight(h)
-            self.updateGeometry()
-
-    def sizeHint(self):  # noqa: N802 (Qt override)
-        return QSize(super().sizeHint().width(), self._content_h)
-
-    def minimumSizeHint(self):  # noqa: N802 (Qt override)
-        return QSize(super().minimumSizeHint().width(), self._MIN_H)
-
-    def mimeTypes(self) -> list[str]:
-        return [_MEETING_MIME]
-
-    def mimeData(self, items):  # noqa: N802 (Qt override)
-        mid = items[0].data(Qt.ItemDataRole.UserRole) if items else None
-        mime = QMimeData()
-        if mid is not None:
-            mime.setData(_MEETING_MIME, str(int(mid)).encode("utf-8"))
-        return mime
-
-    def dragEnterEvent(self, event):  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(_MEETING_MIME):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(_MEETING_MIME):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event):  # noqa: N802 (Qt override)
-        mime = event.mimeData()
-        if not mime.hasFormat(_MEETING_MIME):
-            super().dropEvent(event)
-            return
-        try:
-            mid = int(bytes(mime.data(_MEETING_MIME)).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            event.ignore()
-            return
-        self.meeting_dropped.emit(mid, None)
-        event.acceptProposedAction()
-
-
-class _FolderTree(QTreeWidget):
-    """The folders tree — accepts a dropped meeting id (files it), and lets a
-    meeting child be dragged back out (unfiles it).
-
-    Sizes itself to its content (mockup: it flows in the sidebar, no boxed
-    empty space) but only as a PREFERENCE — when the window is short the
-    sidebar column is over-constrained, and demanding the height (fixed/min)
-    makes Qt's min-clamp paint the tree over the widgets below it. Preferred
-    height + content-capped maximum shrinks gracefully instead (the tree
-    scrolls internally)."""
-
-    meeting_dropped = Signal(int, object)  # meeting_id, folder_id (None = unfile)
-
-    _MIN_H = 34  # ~one row: what we shrink to under pressure
-    # effectively uncapped: the tree sits in the sidebar's single scroll column
-    # now, so overflow scrolls at the COLUMN level instead of inside the tree
-    _MAX_CONTENT_H = 100000
-
-    def __init__(self):
-        super().__init__()
-        self._content_h = self._MIN_H
-        pol = self.sizePolicy()
-        pol.setVerticalPolicy(QSizePolicy.Policy.Preferred)
-        self.setSizePolicy(pol)
-
-    def set_content_height(self, h: int) -> None:
-        h = max(self._MIN_H, min(h, self._MAX_CONTENT_H))
-        if h != self._content_h:
-            self._content_h = h
-            self.setMaximumHeight(h)  # never taller than the content
-            self.updateGeometry()
-
-    def sizeHint(self):  # noqa: N802 (Qt override)
-        return QSize(super().sizeHint().width(), self._content_h)
-
-    def minimumSizeHint(self):  # noqa: N802 (Qt override)
-        return QSize(super().minimumSizeHint().width(), self._MIN_H)
-
-    def mimeTypes(self) -> list[str]:
-        return [_MEETING_MIME]
-
-    def mimeData(self, items):  # noqa: N802 (Qt override)
-        mime = QMimeData()
-        if items:
-            kind, payload = items[0].data(0, Qt.ItemDataRole.UserRole)
-            if kind == "meeting":
-                mime.setData(_MEETING_MIME, str(int(payload)).encode("utf-8"))
-        return mime
-
-    def dragEnterEvent(self, event):  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(_MEETING_MIME):
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):  # noqa: N802 (Qt override)
-        if event.mimeData().hasFormat(_MEETING_MIME):
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event):  # noqa: N802 (Qt override)
-        mime = event.mimeData()
-        if not mime.hasFormat(_MEETING_MIME):
-            super().dropEvent(event)
-            return
-        try:
-            mid = int(bytes(mime.data(_MEETING_MIME)).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            event.ignore()
-            return
-        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        item = self.itemAt(pos)
-        folder_id = None
-        if item is not None:
-            kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
-            if kind == "folder":
-                folder_id = payload
-            elif kind == "meeting":
-                parent = item.parent()
-                if parent is not None:
-                    pkind, ppayload = parent.data(0, Qt.ItemDataRole.UserRole)
-                    if pkind == "folder":
-                        folder_id = ppayload
-        if folder_id is not None:
-            self.meeting_dropped.emit(mid, folder_id)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-
-class ThemeToggleSlider(QWidget):
-    """A ~64x30 pill switch replacing the old text theme button: a sun glyph on
-    the left, a moon glyph on the right, and a 24px knob that slides left (light)
-    or right (dark). The knob's position is a real Qt property so a
-    QPropertyAnimation can tween it smoothly instead of jump-cutting."""
-
-    _WIDTH = 64
-    _HEIGHT = 30
-    _KNOB = 24
-    _MARGIN = 3
-
-    def __init__(self, theme, on_toggle, parent=None):
-        super().__init__(parent)
-        self.theme = theme
-        self._on_toggle = on_toggle
-        self._knob_pos = 0.0  # 0.0 = left (light), 1.0 = right (dark)
-        self.setFixedSize(self._WIDTH, self._HEIGHT)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("Switch light/dark theme")
-        self._anim = QPropertyAnimation(self, b"knobPos", self)
-        self._anim.setDuration(180)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._sync_to_mode(animate=False)
-
-    # ---- animated float property (knob position, 0..1) ----
-    def _get_knob_pos(self) -> float:
-        return self._knob_pos
-
-    def _set_knob_pos(self, value: float) -> None:
-        self._knob_pos = value
-        self.update()
-
-    knobPos = Property(float, _get_knob_pos, _set_knob_pos)  # noqa: N815 (Qt property naming)
-
-    def _sync_to_mode(self, *, animate: bool = True) -> None:
-        target = 1.0 if self.theme.mode == "dark" else 0.0
-        if not animate:
-            self._anim.stop()
-            self._knob_pos = target
-            self.update()
-            return
-        self._anim.stop()
-        self._anim.setStartValue(self._knob_pos)
-        self._anim.setEndValue(target)
-        self._anim.start()
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
-            event.position().toPoint() if hasattr(event, "position") else event.pos()
-        ):
-            self._on_toggle()
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        track_rect = QRectF(0, 0, self._WIDTH, self._HEIGHT)
-        painter.setPen(QColor(self.theme.color("border_strong")))
-        painter.setBrush(QColor(self.theme.color("surface_hover")))
-        painter.drawRoundedRect(track_rect, self._HEIGHT / 2, self._HEIGHT / 2)
-
-        # sun (left) + moon (right) glyphs, muted so the knob reads as the focus
-        muted = self.theme.color("text_faint")
-        sun_pm = icons.pixmap("sun", muted, 14)
-        moon_pm = icons.pixmap("moon", muted, 14)
-        painter.drawPixmap(int(self._MARGIN + 2), int((self._HEIGHT - 14) / 2), sun_pm)
-        painter.drawPixmap(int(self._WIDTH - self._MARGIN - 16), int((self._HEIGHT - 14) / 2), moon_pm)
-
-        # knob: slides between the left rest position and the right rest position
-        travel = self._WIDTH - self._KNOB - 2 * self._MARGIN
-        knob_x = self._MARGIN + self._knob_pos * travel
-        knob_y = (self._HEIGHT - self._KNOB) / 2
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.theme.color("primary")))
-        painter.drawEllipse(QRectF(knob_x, knob_y, self._KNOB, self._KNOB))
-        painter.end()
-
-    def apply_theme(self) -> None:
-        """Called on every theme flip: re-tints via repaint and (re)animates the
-        knob to the new side."""
-        self._sync_to_mode(animate=True)
-        self.update()
 
 
 class AccountCard(QFrame):
@@ -371,20 +111,26 @@ class Shell(QMainWindow):
         self.cfg = cfg
         self.theme = theme
         self.setWindowTitle("Earshot")
-        self.resize(1100, 720)
-        self.setMinimumSize(880, 600)
+        # Wispr-Flow-like default viewport: roomy enough for the two-column
+        # Settings screen and side-by-side plan cards.
+        self.resize(1336, 843)
+        self.setMinimumSize(960, 620)
 
         self.home = HomePage(self, repo, cfg, theme)
         self.record = RecordPage(self, repo, cfg, theme)
         self.detail = DetailPage(self, repo, cfg, theme)
         self.settings = SettingsPage(self, repo, cfg, theme)
         self.ask = AskPage(self, repo, cfg, theme)
-        self.integrations = IntegrationsPage(self, repo, cfg, theme)
-        self.account = AccountPage(self, repo, cfg, theme)
+        self.help = HelpPage(self, repo, cfg, theme)
+        self.project = ProjectPage(self, repo, cfg, theme)
+        self._active_project = None  # ("folder", folder_id|None) while a project is open
 
         self._build()
         self.theme.changed.connect(self._on_theme_changed)
         self.notify_data_changed()
+        self.refresh_plan_state()
+        if self.cfg.sidebar_collapsed:
+            self._apply_sidebar_collapsed()
         self.show_home()
         # after the window is up, quietly salvage any recording a crash left behind
         QTimer.singleShot(900, self._salvage_interrupted)
@@ -400,6 +146,21 @@ class Shell(QMainWindow):
         self.call_watcher.call_ended.connect(self._on_call_ended)
         self.call_watcher.start()
 
+    # ---------- embedded-page accessors ----------
+    # Account and Integrations live INSIDE Settings now (panes under the
+    # ACCOUNT/SETTINGS nav rail) — these keep the old shell attributes working.
+    @property
+    def account(self):
+        return self.settings.account_page
+
+    @property
+    def integrations(self):
+        return self.settings.integrations_page
+
+    @property
+    def plans(self):
+        return self.settings.plans_page
+
     # ---------- construction ----------
     def _build(self) -> None:
         root = QWidget()
@@ -412,8 +173,18 @@ class Shell(QMainWindow):
         self.sidebar = self._sidebar()
         self.stack = QStackedWidget()
         for page in (self.home, self.record, self.detail, self.settings, self.ask,
-                     self.integrations, self.account):
+                     self.help, self.project):
             self.stack.addWidget(page)
+
+        # floating "expand" affordance shown only while the sidebar is collapsed
+        self.expand_btn = QToolButton(self.stack)
+        self.expand_btn.setObjectName("SidebarExpand")
+        self.expand_btn.setFixedSize(30, 30)
+        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.expand_btn.setToolTip("Show sidebar")
+        self.expand_btn.clicked.connect(self.toggle_sidebar)
+        self.expand_btn.hide()
+        self.stack.installEventFilter(self)
 
         # A splitter makes the sidebar drag-resizable; its order flips for L/R.
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -448,6 +219,10 @@ class Shell(QMainWindow):
         self.sidebar.setProperty("side", side)
         self.sidebar.style().unpolish(self.sidebar)
         self.sidebar.style().polish(self.sidebar)
+        # re-parenting into the splitter re-shows the sidebar — respect collapse
+        if getattr(self.cfg, "sidebar_collapsed", False) and hasattr(self, "expand_btn"):
+            self.sidebar.setVisible(False)
+            self._position_expand_btn()
 
     def _on_splitter_moved(self, *_) -> None:
         sizes = self.splitter.sizes()
@@ -469,10 +244,26 @@ class Shell(QMainWindow):
         bar.setMinimumWidth(190)
         bar.setMaximumWidth(640)
         lay = QVBoxLayout(bar)
-        lay.setContentsMargins(16, 18, 16, 16)
+        lay.setContentsMargins(16, 12, 16, 16)
         lay.setSpacing(12)
 
-        # logo + title
+        # window chrome row: collapse toggle (left) + light/dark toggle (right)
+        chrome = QHBoxLayout()
+        chrome.setSpacing(4)
+        self.collapse_btn = QToolButton()
+        self.collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.collapse_btn.setToolTip("Hide sidebar")
+        self.collapse_btn.clicked.connect(self.toggle_sidebar)
+        chrome.addWidget(self.collapse_btn)
+        chrome.addStretch(1)
+        self.theme_btn = QToolButton()
+        self.theme_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_btn.setToolTip("Switch light/dark theme")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        chrome.addWidget(self.theme_btn)
+        lay.addLayout(chrome)
+
+        # logo + title + plan chip (Plus / Trial, when signed in)
         head = QHBoxLayout()
         head.setSpacing(10)
         self.logo = QLabel()
@@ -482,6 +273,9 @@ class Shell(QMainWindow):
         title.setObjectName("H2")
         head.addWidget(self.logo)
         head.addWidget(title)
+        self.plan_chip = QLabel("")
+        self.plan_chip.setVisible(False)
+        head.addWidget(self.plan_chip, 0, Qt.AlignmentFlag.AlignVCenter)
         head.addStretch(1)
         lay.addLayout(head)
 
@@ -506,10 +300,15 @@ class Shell(QMainWindow):
         self.import_btn.clicked.connect(self._import_file)
         lay.addWidget(self.import_btn)
 
-        # search
+        # search — results open in the main window (the project page in search
+        # mode), debounced so typing doesn't re-query per keystroke
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search meetings…")
-        self.search.textChanged.connect(self._filter_list)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self._run_search)
+        self.search.textChanged.connect(lambda _t: self._search_timer.start())
         self.search_action = self.search.addAction(
             icons.icon("search", self.theme.color("text_faint"), 16),
             QLineEdit.ActionPosition.LeadingPosition,
@@ -522,23 +321,14 @@ class Shell(QMainWindow):
         self.ask_btn = self._nav_button("Ask Earshot", self.show_ask)
         lay.addWidget(self.ask_btn)
 
-        # ---- middle column: PROJECTS + MEETING NOTES in ONE scroll area ----
-        # Both sections size to their content and the column scrolls as a
-        # whole — two widgets fighting for height gave cramped twin
-        # scrollbars on short windows. The host must report its content
-        # height as its MINIMUM: QScrollArea(widgetResizable) compresses the
-        # widget to minimumSizeHint before it ever scrolls, which would
-        # min-clamp-overlap the sections all over again.
-        class _MidHost(QWidget):
-            def minimumSizeHint(inner):  # noqa: N805 (Qt override, local class)
-                return QSize(0, inner.sizeHint().height())
-
-        mid_host = _MidHost()
+        # ---- PROJECTS: a collapsible dropdown of project folders ONLY ----
+        # No meeting rows in the sidebar any more — clicking a project opens
+        # it in the main window, and unfiled notes live in "Uncategorized".
+        mid_host = QWidget()
         mid_lay = QVBoxLayout(mid_host)
         mid_lay.setContentsMargins(0, 0, 0, 0)
         mid_lay.setSpacing(8)
 
-        # ---- PROJECTS section (internal name/keys/DB stay folder_*) ----
         folders_head = QHBoxLayout()
         folders_head.setSpacing(4)
         folders_sect = QLabel("PROJECTS")
@@ -556,49 +346,11 @@ class Shell(QMainWindow):
         folders_head.addWidget(self.folders_chevron_btn)
         mid_lay.addLayout(folders_head)
 
-        self.folder_tree = _FolderTree()
-        self.folder_tree.setObjectName("SidebarTree")
-        self.folder_tree.setHeaderHidden(True)
-        self.folder_tree.setIndentation(14)
-        self.folder_tree.setRootIsDecorated(True)
-        self.folder_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.folder_tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # rows are IDENTICAL to the MEETING NOTES list below: one line, elided,
-        # same pill height — filed and unfiled meetings must read the same
-        self.folder_tree.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.folder_tree.setWordWrap(False)
-        self.folder_tree.setUniformRowHeights(True)
-        self.folder_tree.itemClicked.connect(self._on_tree_click)
-        self.folder_tree.itemExpanded.connect(lambda _i: self._queue_fit_folder_tree())
-        self.folder_tree.itemCollapsed.connect(lambda _i: self._queue_fit_folder_tree())
-        self.folder_tree.installEventFilter(self)
-        self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.folder_tree.customContextMenuRequested.connect(self._on_folder_context_menu)
-        # drag & drop: a meeting dragged out of a folder lands back on the list
-        self.folder_tree.setDragEnabled(True)
-        self.folder_tree.setAcceptDrops(True)
-        self.folder_tree.setDropIndicatorShown(True)
-        self.folder_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.folder_tree.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
-        self.folder_tree.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
-        mid_lay.addWidget(self.folder_tree)
-
-        sect = QLabel("MEETING NOTES")
-        sect.setObjectName("SectionLabel")
-        mid_lay.addWidget(sect)
-
-        self.meeting_list = _MeetingList()
-        self.meeting_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.meeting_list.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.meeting_list.itemClicked.connect(self._on_list_click)
-        # drag & drop: a meeting dragged here from a folder becomes unfiled
-        self.meeting_list.setDragEnabled(True)
-        self.meeting_list.setAcceptDrops(True)
-        self.meeting_list.setDropIndicatorShown(True)
-        self.meeting_list.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.meeting_list.setDragDropMode(QListWidget.DragDropMode.DragDrop)
-        self.meeting_list.meeting_dropped.connect(self._on_meeting_dropped_on_folder)
-        mid_lay.addWidget(self.meeting_list)
+        self.projects_host = QWidget()
+        self.projects_lay = QVBoxLayout(self.projects_host)
+        self.projects_lay.setContentsMargins(0, 0, 0, 0)
+        self.projects_lay.setSpacing(2)
+        mid_lay.addWidget(self.projects_host)
         mid_lay.addStretch(1)
 
         self.sidebar_scroll = QScrollArea()
@@ -609,30 +361,49 @@ class Shell(QMainWindow):
         self.sidebar_scroll.setWidget(mid_host)
         lay.addWidget(self.sidebar_scroll, 1)
 
-        # bottom cluster (mockup order): Integrations -> Settings -> theme
-        # toggle -> account card -> version label
-        self.integrations_btn = self._nav_button("Integrations", self.show_integrations)
-        lay.addWidget(self.integrations_btn)
+        # bottom cluster: status/upgrade card (conditional) -> Settings -> Help
+        # -> account card. Integrations, the theme pill and the version label
+        # moved into Settings — the sidebar stays lean.
+        self.status_card = self._status_card()
+        self.status_card.setVisible(False)
+        lay.addWidget(self.status_card)
+
         self.settings_btn = self._nav_button("Settings", self.show_settings)
         lay.addWidget(self.settings_btn)
-
-        theme_row = QHBoxLayout()
-        theme_row.addStretch(1)
-        self.theme_toggle = ThemeToggleSlider(self.theme, self._toggle_theme)
-        theme_row.addWidget(self.theme_toggle)
-        theme_row.addStretch(1)
-        lay.addLayout(theme_row)
+        self.help_btn = self._nav_button("Help", self._open_help_menu)
+        self.help_btn.setCheckable(False)
+        lay.addWidget(self.help_btn)
 
         self.account_card = AccountCard(self.cfg, self.theme, self.show_account)
         lay.addWidget(self.account_card)
 
-        ver = QLabel(f"v{__version__}")
-        ver.setObjectName("Faint")
-        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(ver)
-
         self._refresh_sidebar_icons()
         return bar
+
+    def _status_card(self) -> QFrame:
+        """The Wispr-style prompt card above the bottom nav: shown while a Plus
+        trial is running, a payment failed, or auto-renewal is off. Content is
+        rendered from the cached /v1/me snapshot in refresh_plan_state()."""
+        card = QFrame()
+        card.setObjectName("StatusCard")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(6)
+        self.status_title = QLabel("")
+        self.status_title.setObjectName("H3")
+        self.status_title.setWordWrap(True)
+        cl.addWidget(self.status_title)
+        self.status_body = QLabel("")
+        self.status_body.setObjectName("Muted")
+        self.status_body.setWordWrap(True)
+        cl.addWidget(self.status_body)
+        self.status_btn = QPushButton("Upgrade")
+        self.status_btn.setProperty("variant", "primary")
+        self.status_btn.setMinimumHeight(34)
+        self.status_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.status_btn.clicked.connect(lambda: self.show_settings("plans"))
+        cl.addWidget(self.status_btn)
+        return card
 
     def _nav_button(self, text: str, slot) -> QPushButton:
         b = QPushButton("  " + text)
@@ -645,61 +416,161 @@ class Shell(QMainWindow):
 
     # ---------- navigation ----------
     def _set_active(self, which: str) -> None:
+        """Highlight the active sidebar affordance: the three nav buttons plus
+        the project rows (which is "project" while a project page is open)."""
         self.home_btn.setChecked(which == "home")
         self.ask_btn.setChecked(which == "ask")
         self.settings_btn.setChecked(which == "settings")
-        self.integrations_btn.setChecked(which == "integrations")
-
-    def _clear_selections(self) -> None:
-        """Selection hygiene: only one of {list, tree} should ever show a
-        highlighted row at a time."""
-        if hasattr(self, "meeting_list"):
-            self.meeting_list.clearSelection()
-        if hasattr(self, "folder_tree"):
-            self.folder_tree.clearSelection()
+        if which != "project":
+            self._active_project = None
+        self._sync_project_checks()
 
     def show_home(self) -> None:
         self.home.refresh()
         self.stack.setCurrentWidget(self.home)
         self._set_active("home")
-        self._clear_selections()
 
     def show_ask(self) -> None:
         self.ask.on_shown()
         self.stack.setCurrentWidget(self.ask)
         self._set_active("ask")
-        self._clear_selections()
 
     def show_record(self) -> None:
         self.record.on_shown()
         self.stack.setCurrentWidget(self.record)
         self._set_active("record")
-        self._clear_selections()
 
-    def show_settings(self) -> None:
-        self.settings.apply_theme()
+    def show_settings(self, section: str | None = None) -> None:
+        """Open Settings, optionally straight to a section key (general / audio /
+        transcription / ai / integrations / about / account / plans). The nav
+        button's clicked(bool) also lands here — only a real key switches pane."""
+        if isinstance(section, str) and section:
+            self.settings.show_section(section)
         self.stack.setCurrentWidget(self.settings)
         self._set_active("settings")
-        self._clear_selections()
 
     def show_integrations(self) -> None:
-        self.integrations.apply_theme()
-        self.stack.setCurrentWidget(self.integrations)
-        self._set_active("integrations")
-        self._clear_selections()
+        self.show_settings("integrations")
 
     def show_account(self) -> None:
-        self.account.refresh()
-        self.stack.setCurrentWidget(self.account)
+        self.show_settings("account")
+
+    def show_help(self) -> None:
+        self.stack.setCurrentWidget(self.help)
         self._set_active("none")
-        self._clear_selections()
+
+    def show_project(self, folder_id) -> None:
+        """Open a project in the main window: an int folder id, or None for the
+        Uncategorized project (every meeting not filed anywhere)."""
+        self.project.load_folder(folder_id)
+        self.stack.setCurrentWidget(self.project)
+        self._active_project = ("folder", folder_id)
+        self._set_active("project")
+
+    def _open_help_menu(self) -> None:
+        """The sidebar Help button: a small menu popping up above the button,
+        Wispr-style — the Help Center guide, release notes, and outside links."""
+        import webbrowser
+
+        from .page_help import ISSUES_URL, WEBSITE_URL
+
+        menu = QMenu(self)
+        c = self.theme.color("text_muted")
+        menu.addAction(icons.icon("book-open", c, 16), "Help Center", self.show_help)
+        menu.addAction(icons.icon("info", c, 16), "What's new",
+                       lambda: self.show_settings("about"))
+        menu.addSeparator()
+
+        def _open(url: str) -> None:
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+
+        menu.addAction(icons.icon("external-link", c, 16), "Visit tryearshot.app",
+                       lambda: _open(WEBSITE_URL))
+        menu.addAction(icons.icon("alert-triangle", c, 16), "Report an issue",
+                       lambda: _open(ISSUES_URL))
+        pos = self.help_btn.mapToGlobal(QPoint(0, 0))
+        pos.setY(pos.y() - menu.sizeHint().height() - 6)
+        menu.exec(pos)
 
     def on_account_changed(self) -> None:
         """Called after signing in to / out of Earshot Plus: rebuild the Settings
-        tabs (Transcription/AI hide in cloud mode) and refresh the sidebar card."""
+        sections (Transcription/AI hide in cloud mode) and refresh the sidebar."""
         if hasattr(self.settings, "refresh_tabs"):
             self.settings.refresh_tabs()
         self.refresh_account_card()
+        self.refresh_plan_state()
+
+    # ---------- sidebar collapse ----------
+    def toggle_sidebar(self) -> None:
+        self.cfg.sidebar_collapsed = not self.cfg.sidebar_collapsed
+        self.cfg.save()
+        self._apply_sidebar_collapsed()
+
+    def _apply_sidebar_collapsed(self) -> None:
+        collapsed = bool(self.cfg.sidebar_collapsed)
+        self.sidebar.setVisible(not collapsed)
+        self.expand_btn.setVisible(collapsed)
+        if collapsed:
+            self._position_expand_btn()
+        else:
+            self._arrange_splitter()
+
+    def _position_expand_btn(self) -> None:
+        """Keep the floating expand button pinned to the content's top corner on
+        the side the sidebar lives on."""
+        m = 10
+        if self.cfg.sidebar_side == "right":
+            x = max(m, self.stack.width() - self.expand_btn.width() - m)
+        else:
+            x = m
+        self.expand_btn.move(x, m)
+        self.expand_btn.raise_()
+
+    # ---------- plan chip + status card ----------
+    def refresh_plan_state(self) -> None:
+        """Render the logo plan chip and the sidebar status card from the cached
+        /v1/me snapshot (cfg.extra) — no network calls here."""
+        cloud = self.cfg.account_mode == "cloud"
+        status = (self.cfg.extra.get("cloud_sub_status") or "").strip()
+        end = (self.cfg.extra.get("cloud_period_end") or "").strip()
+
+        if cloud:
+            trialing = status in ("trialing", "beta")
+            self.plan_chip.setText("Plus Trial" if trialing else "Plus")
+            self.plan_chip.setStyleSheet(
+                f"background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};"
+                f"border-radius:8px; padding:2px 8px; font-size:11px; font-weight:700;"
+            )
+            self.plan_chip.setVisible(True)
+        else:
+            self.plan_chip.setVisible(False)
+
+        show_card = False
+        if cloud and status in ("trialing", "beta"):
+            self.status_title.setText("Plus trial active")
+            self.status_body.setText(
+                f"Your trial ends {end}. Upgrade to keep Plus features." if end
+                else "Upgrade to keep Plus features when your trial ends."
+            )
+            self.status_btn.setText("Upgrade to Plus")
+            show_card = True
+        elif cloud and status == "past_due":
+            self.status_title.setText("Payment needs attention")
+            self.status_body.setText("Update billing to keep Earshot Plus running.")
+            self.status_btn.setText("Fix billing")
+            show_card = True
+        elif cloud and status == "canceled":
+            self.status_title.setText("Auto-renewal is off")
+            self.status_body.setText(
+                f"Plus stays active until {end}. Renew to keep it." if end
+                else "Renew to keep Earshot Plus."
+            )
+            self.status_btn.setText("Renew")
+            show_card = True
+        self.status_card.setVisible(show_card)
 
     @staticmethod
     def _headless() -> bool:
@@ -717,8 +588,7 @@ class Shell(QMainWindow):
         dlg = OnboardingDialog(self, self.cfg, self.theme, shell=self)
         dlg.exec()
         self.on_account_changed()
-        if self.stack.currentWidget() is self.account:
-            self.account.refresh()
+        # (the Account pane refreshes itself via refresh_tabs -> show_section)
 
     def refresh_account_card(self) -> None:
         """Called after the account display name changes (from the Account page)
@@ -726,17 +596,10 @@ class Shell(QMainWindow):
         if hasattr(self, "account_card"):
             self.account_card.refresh()
 
-    def open_meeting(self, meeting_id: int, *, _from_tree: bool = False) -> None:
+    def open_meeting(self, meeting_id: int) -> None:
         self.detail.load(int(meeting_id))
         self.stack.setCurrentWidget(self.detail)
         self._set_active("none")
-        # whichever widget triggered the open keeps its own selection; clear the other
-        if _from_tree:
-            if hasattr(self, "meeting_list"):
-                self.meeting_list.clearSelection()
-        else:
-            if hasattr(self, "folder_tree"):
-                self.folder_tree.clearSelection()
 
     # ---------- call auto-detection ----------
     def _on_call_started(self, apps: list) -> None:
@@ -874,93 +737,79 @@ class Shell(QMainWindow):
 
     # ---------- data + theme ----------
     def notify_data_changed(self) -> None:
-        self._rebuild_list()
-        if self.stack.currentWidget() is self.home:
+        self._rebuild_projects()
+        current = self.stack.currentWidget()
+        if current is self.home:
             self.home.refresh()
+        elif current is self.project:
+            self.project.refresh()
 
-    def _rebuild_list(self) -> None:
-        # remember which folders were expanded so a rebuild (e.g. after a plain
-        # rename elsewhere) doesn't visually collapse everything
-        expanded_ids = self._expanded_folder_ids()
+    def _rebuild_projects(self) -> None:
+        """(Re)build the sidebar PROJECTS rows: one row per project folder plus
+        an always-present Uncategorized project for unfiled notes. Rows only —
+        the meetings themselves open in the main window."""
+        lay = self.projects_lay
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
 
-        all_meetings = self.repo.list()
-        folders = self.repo.list_folders()
-        by_folder: dict[int, list] = {}
-        unfiled = []
-        for m in all_meetings:
-            if m.folder_id is not None:
-                by_folder.setdefault(m.folder_id, []).append(m)
+        meetings = self.repo.list()
+        counts: dict = {}
+        uncat = 0
+        for m in meetings:
+            if m.folder_id is None:
+                uncat += 1
             else:
-                unfiled.append(m)
+                counts[m.folder_id] = counts.get(m.folder_id, 0) + 1
 
-        self.folder_tree.clear()
-        for f in folders:
-            count = len(by_folder.get(f.id, []))
-            folder_item = QTreeWidgetItem([f"{f.name} ({count})"])
-            folder_item.setIcon(0, icons.icon("folder", f.color, 16))
-            folder_item.setData(0, Qt.ItemDataRole.UserRole, ("folder", f.id))
-            self.folder_tree.addTopLevelItem(folder_item)
-            for m in by_folder.get(f.id, []):
-                child = QTreeWidgetItem([m.title or "Untitled meeting"])
-                child.setIcon(0, icons.icon("file", self.theme.color("text_muted"), 16))
-                child.setData(0, Qt.ItemDataRole.UserRole, ("meeting", m.id))
-                folder_item.addChild(child)
-            folder_item.setExpanded(f.id in expanded_ids if expanded_ids is not None else True)
-
-        self.meeting_list.clear()
-        for m in unfiled:
-            item = QListWidgetItem(m.title or "Untitled meeting")
-            item.setData(Qt.ItemDataRole.UserRole, m.id)
-            item.setIcon(icons.icon("file", self.theme.color("text_muted"), 16))
-            self.meeting_list.addItem(item)
+        self._project_rows = {}
+        for f in self.repo.list_folders():
+            lay.addWidget(self._project_row(f.name, counts.get(f.id, 0), f.id, f.color))
+        lay.addWidget(self._project_row("Uncategorized", uncat, None, None))
 
         self._apply_folders_collapsed()
-        self._filter_list(self.search.text())
+        self._sync_project_checks()
 
-    def _expanded_folder_ids(self) -> set | None:
-        """The set of currently-expanded folder ids, or None on first build
-        (no items yet) so callers can default new/first-seen folders to expanded."""
-        if self.folder_tree.topLevelItemCount() == 0:
-            return None
-        out = set()
-        for i in range(self.folder_tree.topLevelItemCount()):
-            item = self.folder_tree.topLevelItem(i)
-            if item.isExpanded():
-                _kind, fid = item.data(0, Qt.ItemDataRole.UserRole)
-                out.add(fid)
-        return out
+    def _project_row(self, name: str, count: int, folder_id, color: str | None) -> QPushButton:
+        btn = QPushButton(f"  {name}  ({count})".replace("&", "&&"))
+        btn.setProperty("variant", "ghost")
+        btn.setCheckable(True)
+        btn.setMinimumHeight(36)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip(name)
+        icon_color = color if color else self.theme.color("text_faint")
+        btn.setIcon(icons.icon("folder", icon_color, 16))
+        btn.clicked.connect(lambda _=False, fid=folder_id: self.show_project(fid))
+        if folder_id is not None:  # Uncategorized can't be renamed/deleted
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, fid=folder_id, b=btn: self._on_project_context_menu(fid, b.mapToGlobal(pos))
+            )
+        self._project_rows[folder_id] = btn
+        return btn
+
+    def _sync_project_checks(self) -> None:
+        active = self._active_project
+        for fid, btn in getattr(self, "_project_rows", {}).items():
+            btn.setChecked(active == ("folder", fid))
 
     def _apply_folders_collapsed(self) -> None:
-        # the tree itself is hidden when collapsed OR simply empty of folders
-        # (spec: header stays visible so [+] is discoverable, only the tree hides)
-        collapsed = bool(self.cfg.folders_collapsed)
-        has_folders = self.folder_tree.topLevelItemCount() > 0
-        self.folder_tree.setVisible(has_folders and not collapsed)
+        # header (with [+]) stays visible; only the project rows fold away
+        self.projects_host.setVisible(not bool(self.cfg.folders_collapsed))
         self._set_folders_chevron_icon()
-        self._queue_fit_folder_tree()
-
-    def _queue_fit_folder_tree(self) -> None:
-        # after the pending relayout, so wrapped-row heights are final
-        QTimer.singleShot(0, self._fit_folder_tree_height)
-
-    def _fit_folder_tree_height(self) -> None:
-        """Measure the tree's content and feed it to the tree's preferred
-        height (see _FolderTree: preference, not a demand)."""
-        t = self.folder_tree
-        t.doItemsLayout()  # re-query wrap heights at the current width
-        h = 0
-        for i in range(t.topLevelItemCount()):
-            top = t.topLevelItem(i)
-            h += t.visualItemRect(top).height()
-            if top.isExpanded():
-                for j in range(top.childCount()):
-                    h += t.visualItemRect(top.child(j)).height()
-        t.set_content_height(h + 8)
 
     def eventFilter(self, obj, event):
-        # sidebar splitter drags change the wrap width -> row heights change
-        if obj is self.folder_tree and event.type() == QEvent.Type.Resize:
-            self._queue_fit_folder_tree()
+        # keep the floating expand button pinned while the sidebar is collapsed
+        if (
+            obj is getattr(self, "stack", None)
+            and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)
+            and getattr(self, "expand_btn", None) is not None
+            and self.expand_btn.isVisible()
+        ):
+            self._position_expand_btn()
         return super().eventFilter(obj, event)
 
     def _toggle_folders_collapsed(self) -> None:
@@ -975,66 +824,16 @@ class Shell(QMainWindow):
         )
         self.folders_chevron_btn.setToolTip("Expand projects" if collapsed else "Collapse projects")
 
-    def _filter_list(self, text: str) -> None:
-        text = (text or "").strip()
-        if not text:
-            for i in range(self.meeting_list.count()):
-                self.meeting_list.item(i).setHidden(False)
-            for i in range(self.folder_tree.topLevelItemCount()):
-                folder_item = self.folder_tree.topLevelItem(i)
-                folder_item.setHidden(False)
-                for j in range(folder_item.childCount()):
-                    folder_item.child(j).setHidden(False)
-            self._queue_fit_sidebar()
-            return
-        # full-text match across transcript + notes + attendees + agenda, plus
-        # a plain title substring so partial words still narrow the list live.
-        match_ids = set(self.repo.search(text))
-        low = text.lower()
-        for i in range(self.meeting_list.count()):
-            item = self.meeting_list.item(i)
-            mid = item.data(Qt.ItemDataRole.UserRole)
-            visible = (mid in match_ids) or (low in item.text().lower())
-            item.setHidden(not visible)
-        for i in range(self.folder_tree.topLevelItemCount()):
-            folder_item = self.folder_tree.topLevelItem(i)
-            any_visible = False
-            for j in range(folder_item.childCount()):
-                child = folder_item.child(j)
-                mid = child.data(0, Qt.ItemDataRole.UserRole)[1]
-                visible = (mid in match_ids) or (low in child.text(0).lower())
-                child.setHidden(not visible)
-                any_visible = any_visible or visible
-            folder_item.setHidden(not any_visible)
-        self._queue_fit_sidebar()
-
-    def _queue_fit_sidebar(self) -> None:
-        """Re-fit BOTH content-sized sidebar sections after the pending relayout."""
-        self._queue_fit_folder_tree()
-        QTimer.singleShot(0, self._fit_meeting_list_height)
-
-    def _fit_meeting_list_height(self) -> None:
-        """Size the unfiled list to its visible content — it scrolls at the
-        sidebar-column level, never internally."""
-        lst = self.meeting_list
-        lst.doItemsLayout()
-        h = 0
-        for i in range(lst.count()):
-            item = lst.item(i)
-            if not item.isHidden():
-                h += lst.visualItemRect(item).height()
-        lst.set_content_height(h + 6)
-
-    def _on_list_click(self, item: QListWidgetItem) -> None:
-        mid = item.data(Qt.ItemDataRole.UserRole)
-        if mid is not None:
-            self.open_meeting(int(mid))
-
-    def _on_tree_click(self, item: QTreeWidgetItem, _col: int) -> None:
-        kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
-        if kind == "meeting":
-            self.open_meeting(int(payload), _from_tree=True)
-        # a folder row just expands/collapses (Qt's default behaviour) — nothing else to do
+    # ---------- search (results open in the main window) ----------
+    def _run_search(self) -> None:
+        text = self.search.text().strip()
+        if text:
+            self.project.load_search(text)
+            if self.stack.currentWidget() is not self.project:
+                self.stack.setCurrentWidget(self.project)
+            self._set_active("none")
+        elif self.stack.currentWidget() is self.project and self.project.mode[0] == "search":
+            self.show_home()  # cleared the box while looking at results
 
     # ---------- folders ----------
     def _new_folder(self) -> None:
@@ -1045,14 +844,7 @@ class Shell(QMainWindow):
         self.repo.create_folder(name, color)
         self.notify_data_changed()
 
-    def _on_folder_context_menu(self, pos: QPoint) -> None:
-        item = self.folder_tree.itemAt(pos)
-        if item is None:
-            return
-        kind, payload = item.data(0, Qt.ItemDataRole.UserRole)
-        if kind != "folder":
-            return
-        folder_id = payload
+    def _on_project_context_menu(self, folder_id: int, global_pos: QPoint) -> None:
         folders = {f.id: f for f in self.repo.list_folders()}
         folder = folders.get(folder_id)
         if folder is None:
@@ -1068,13 +860,18 @@ class Shell(QMainWindow):
         menu.addSeparator()
         delete_act = menu.addAction("Delete project")
 
-        chosen = menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+        chosen = menu.exec(global_pos)
         if chosen is None:
             return
         if chosen is rename_act:
             self._rename_folder(folder_id, folder.name)
         elif chosen is delete_act:
             self._delete_folder(folder_id, folder.name)
+            # if the deleted project was open, land on Uncategorized (where its
+            # meetings just moved) — the delete may also have been cancelled
+            if (self._active_project == ("folder", folder_id)
+                    and folder_id not in {f.id for f in self.repo.list_folders()}):
+                self.show_project(None)
         elif chosen in color_actions:
             self.repo.update_folder(folder_id, color=color_actions[chosen])
             self.notify_data_changed()
@@ -1102,14 +899,10 @@ class Shell(QMainWindow):
     def _delete_folder(self, folder_id: int, name: str) -> None:
         if QMessageBox.question(
             self, "Delete project",
-            f"Delete “{name}”? Its meetings are kept and become unfiled."
+            f"Delete “{name}”? Its meetings are kept and move to Uncategorized."
         ) != QMessageBox.StandardButton.Yes:
             return
         self.repo.delete_folder(folder_id)
-        self.notify_data_changed()
-
-    def _on_meeting_dropped_on_folder(self, meeting_id: int, folder_id) -> None:
-        self.repo.update(int(meeting_id), folder_id=folder_id)
         self.notify_data_changed()
 
     def _toggle_theme(self) -> None:
@@ -1117,10 +910,13 @@ class Shell(QMainWindow):
 
     def _on_theme_changed(self, _mode: str) -> None:
         self._refresh_sidebar_icons()
-        self._rebuild_list()
+        self._rebuild_projects()
+        # settings cascades to its embedded Account/Plans/Integrations panes;
+        # the project page rebuilds its rows itself
         for page in (self.home, self.record, self.detail, self.settings, self.ask,
-                     self.integrations, self.account):
+                     self.help, self.project):
             page.apply_theme()
+        self.refresh_plan_state()  # chip + status card bake colours into styles
         # rebuild colour-dependent content
         self.home.refresh()
         if self.detail.meeting_id is not None:
@@ -1152,12 +948,16 @@ class Shell(QMainWindow):
         self.import_btn.setIcon(icons.icon("upload", self.theme.color("text_muted"), 16))
         self.home_btn.setIcon(icons.icon("home", self.theme.color("text_muted"), 18))
         self.ask_btn.setIcon(icons.icon("message", self.theme.color("text_muted"), 18))
-        self.integrations_btn.setIcon(icons.icon("zap", self.theme.color("text_muted"), 18))
         self.settings_btn.setIcon(icons.icon("settings", self.theme.color("text_muted"), 18))
+        self.help_btn.setIcon(icons.icon("help-circle", self.theme.color("text_muted"), 18))
+        self.collapse_btn.setIcon(icons.icon("panel-left", self.theme.color("text_muted"), 17))
+        # the theme button previews the mode you'd switch TO
+        self.theme_btn.setIcon(icons.icon(
+            "sun" if self.theme.mode == "dark" else "moon", self.theme.color("text_muted"), 17))
+        if hasattr(self, "expand_btn"):
+            self.expand_btn.setIcon(icons.icon("panel-left", self.theme.color("text_muted"), 16))
         self.new_folder_btn.setIcon(icons.icon("plus", self.theme.color("text_muted"), 14))
         self._set_folders_chevron_icon()
-        if hasattr(self, "theme_toggle"):
-            self.theme_toggle.apply_theme()
         if hasattr(self, "account_card"):
             self.account_card.refresh()
         if hasattr(self, "search_action"):

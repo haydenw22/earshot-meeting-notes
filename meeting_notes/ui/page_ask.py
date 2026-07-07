@@ -130,7 +130,7 @@ class AskPage(QWidget):
             idx = self.scope_combo.count()
             self.scope_combo.addItem(f.name, ("folder", f.id))
             self.scope_combo.setItemIcon(idx, icons.icon("folder", f.color, 16))
-        self.scope_combo.addItem("Unfiled", "unfiled")
+        self.scope_combo.addItem("Uncategorized", "unfiled")
         self.scope_combo.insertSeparator(self.scope_combo.count())
         recent = self.repo.list(limit=_RECENT_MEETINGS_LIMIT)
         for m in recent:

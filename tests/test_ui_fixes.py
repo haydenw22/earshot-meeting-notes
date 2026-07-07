@@ -112,23 +112,27 @@ def main() -> int:
     check("folder disabled with no audio_dir", not page.act_folder.isEnabled())
 
     # ---------------------------------------------------------------
-    print("== shell nav: Home clears the sidebar list selection ==")
+    print("== shell nav: leaving a project clears its sidebar highlight ==")
     from meeting_notes.ui.shell import Shell
 
     shell_repo = MeetingRepository(dbmod.connect(Path(tempfile.mkdtemp()) / "s.db"))
-    sm = shell_repo.create(date_text="d", date_iso="2026-07-02", attendees=[])
+    sf = shell_repo.create_folder("Nav proj", "#6366F1")
+    sm = shell_repo.create(date_text="d", date_iso="2026-07-02", attendees=[], folder_id=sf.id)
     shell_repo.update(sm.id, title="Nav test", status="Done")
     real_shell = Shell(shell_repo, Config(), theme)
-    # A real click both selects the row (Qt's built-in click behaviour) and fires
-    # itemClicked -> _on_list_click -> open_meeting; simulate the selection side
-    # effect explicitly since open_meeting() alone doesn't touch selection.
-    real_shell.meeting_list.setCurrentRow(0)
+    real_shell.show_project(sf.id)
+    app.processEvents()
+    check("project row highlighted while its page is open",
+          real_shell._project_rows[sf.id].isChecked())
     real_shell.open_meeting(sm.id)
     app.processEvents()
-    check("a row is selected after open_meeting", len(real_shell.meeting_list.selectedItems()) >= 1)
+    check("opening a meeting clears the project highlight",
+          not real_shell._project_rows[sf.id].isChecked())
     real_shell.show_home()
     app.processEvents()
-    check("no row selected after show_home", real_shell.meeting_list.selectedItems() == [])
+    check("home nav is highlighted instead", real_shell.home_btn.isChecked())
+    check("no project row highlighted on home",
+          not any(b.isChecked() for b in real_shell._project_rows.values()))
     shell_repo.close()
 
     # ---------------------------------------------------------------
@@ -256,7 +260,7 @@ def main() -> int:
     check("kebab menu has a 'Move to project' submenu", kmove.title() == "Move to project")
     check("kebab menu has Delete", "Delete" in top_texts)
     move_texts = [a.text() for a in kmove.actions()]
-    check("move submenu lists 'No project'", "No project" in move_texts)
+    check("move submenu lists 'Uncategorized'", "Uncategorized" in move_texts)
     check("move submenu lists the current folder", "Ops" in move_texts)
     check("move submenu lists 'New project…'", any("New project" in t for t in move_texts))
 

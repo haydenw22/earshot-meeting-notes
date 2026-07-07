@@ -305,13 +305,32 @@ class AccountPage(QWidget):
         sub_status = data.get("sub_status") or ""
         self._set_status_chip(sub_status)
         period_end = data.get("period_end") or ""
-        if period_end:
+        # copy matches the subscription state: a trial ENDS, a cancelled sub RUNS
+        # OUT, an active sub RENEWS — and the button says what to do about it
+        if sub_status in ("trialing", "beta"):
+            self.renewal_lbl.setText(f"Trial ends {period_end}" if period_end else "Trial active")
+            self.billing_btn.setText("Upgrade now")
+        elif sub_status in ("canceled", "past_due"):
+            self.renewal_lbl.setText(
+                f"Plus stays active until {period_end}" if period_end else "Auto-renewal is off"
+            )
+            self.billing_btn.setText("Renew subscription")
+        elif period_end:
             self.renewal_lbl.setText(f"Renews {period_end}")
         else:
             self.renewal_lbl.setText("")
         billing_url = data.get("billing_url")
         if billing_url:
             self._billing_url = billing_url
+        # cache the snapshot so the sidebar trial card / plan chip can render
+        # without their own network calls
+        self.cfg.extra["cloud_sub_status"] = sub_status
+        self.cfg.extra["cloud_period_end"] = period_end
+        if billing_url:
+            self.cfg.extra["cloud_billing_url"] = billing_url
+        self.cfg.save()
+        if hasattr(self.shell, "refresh_plan_state"):
+            self.shell.refresh_plan_state()
         usage = data.get("usage") or {}
         used = float(usage.get("transcribe_seconds") or 0.0)
         cap = float(usage.get("cap_seconds") or 0.0)

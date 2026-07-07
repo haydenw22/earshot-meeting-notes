@@ -55,7 +55,7 @@ their cloud**. Earshot does neither:
 | | |
 |---|---|
 | <img src="docs/screenshots/detail_light.png" alt="Meeting notes with action-item suggestions and due dates"> | **Notes that end with action.** A tight summary, the decisions, and action-item *suggestions* you approve, edit or dismiss — with due dates filled only when the meeting actually named one. Open items from every meeting roll up into one to-do list. |
-| <img src="docs/screenshots/home_light.png" alt="Light theme home"> | **Organised the way you work.** Colour-coded projects, drag-and-drop filing, full-text search, pre-meeting briefs built from your past meetings, and a light/dark theme that follows your taste. |
+| <img src="docs/screenshots/project_light.png" alt="A project page — its meetings in one clean list"> | **Organised the way you work.** Colour-coded projects in a clean sidebar (with an Uncategorized inbox for everything else), one-click filing from any meeting, full-text search, pre-meeting briefs built from your past meetings, and a light/dark theme that follows your taste. |
 | <img src="docs/screenshots/integrations_light.png" alt="Integrations — Todoist and webhooks"> | **Plays well with your tools.** One-click action items → Todoist (due dates included), a webhook that POSTs finished meetings anywhere Zapier/Make can reach, and clean rich-text copy that pastes perfectly into Notion or email. |
 
 And the rest: **Ask Earshot** natural-language Q&A across every meeting with

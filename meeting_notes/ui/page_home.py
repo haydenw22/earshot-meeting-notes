@@ -254,7 +254,7 @@ class MeetingRow(_ClickableCard):
 
         here = m.folder_id is None
         add("check" if here else "folder", self.theme.color("text_faint"),
-            "No project", lambda _=False: self._move_to_folder(None))
+            "Uncategorized", lambda _=False: self._move_to_folder(None))
 
         for f in self.repo.list_folders():
             here = m.folder_id == f.id
@@ -520,7 +520,7 @@ class HomePage(QWidget):
 
     def _filter_label(self, folders: list) -> str:
         if self._folder_filter == "unfiled":
-            return "Unfiled"
+            return "Uncategorized"
         for f in folders:
             if f.id == self._folder_filter:
                 return f.name
@@ -536,7 +536,7 @@ class HomePage(QWidget):
             count = sum(1 for m in meetings if m.folder_id == f.id)
             lay.addWidget(self._filter_chip(f.name, count, f.id, icon_color=f.color))
         unfiled_count = sum(1 for m in meetings if m.folder_id is None)
-        lay.addWidget(self._filter_chip("Unfiled", unfiled_count, "unfiled"))
+        lay.addWidget(self._filter_chip("Uncategorized", unfiled_count, "unfiled"))
         lay.addStretch(1)
         return row
 

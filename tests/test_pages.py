@@ -1,8 +1,7 @@
-"""Tests for Phase D — the PROJECTS rename, the sidebar bottom cluster
-(Integrations nav, Settings nav, theme toggle slider, account card, version),
-and the two new pages: Integrations (Todoist + Webhook, moved out of
-Settings -> General) and Account (display name, Earshot Cloud "coming soon",
-storage folder).
+"""Tests for the sidebar + pages: the PROJECTS section, the sidebar bottom
+cluster (Settings nav, Help button, account card), the sidebar collapse
+toggle, and the pages now embedded in Settings: Integrations (Todoist +
+Webhook) and Account (display name, Earshot Plus pitch, storage folder).
 
 Run:  QT_QPA_PLATFORM=offscreen python tests/test_pages.py
 """
@@ -81,28 +80,51 @@ def main() -> int:
     check("Home nav button text is 'Overview'", shell.home_btn.text().strip() == "Overview")
 
     # ---------------------------------------------------------------
-    print("== shell: show_integrations()/show_account() switch the stack ==")
+    print("== shell: show_integrations()/show_account() route into Settings ==")
     shell.show_home()
     app.processEvents()
     check("home not hidden after show_home", not shell.home.isHidden())
 
     shell.show_integrations()
     app.processEvents()
-    check("integrations page is the current widget", shell.stack.currentWidget() is shell.integrations)
-    check("integrations page not hidden", not shell.integrations.isHidden())
+    check("settings is the current widget", shell.stack.currentWidget() is shell.settings)
+    check("integrations section selected", shell.settings._current_key == "integrations")
+    check("integrations pane not hidden", not shell.integrations.isHidden())
     check("home page hidden while integrations shown", shell.home.isHidden())
-    check("integrations_btn is checked", shell.integrations_btn.isChecked())
+    check("settings nav button checked", shell.settings_btn.isChecked())
 
     shell.show_account()
     app.processEvents()
-    check("account page is the current widget", shell.stack.currentWidget() is shell.account)
-    check("account page not hidden", not shell.account.isHidden())
-    check("integrations page hidden while account shown", shell.integrations.isHidden())
+    check("account section selected", shell.settings._current_key == "account")
+    check("account pane not hidden", not shell.account.isHidden())
+    check("integrations pane hidden while account shown", shell.integrations.isHidden())
 
     shell.show_home()
     app.processEvents()
     check("home not hidden again after navigating back", not shell.home.isHidden())
-    check("account page hidden after navigating away", shell.account.isHidden())
+    check("settings hidden after navigating away", shell.settings.isHidden())
+
+    # ---------------------------------------------------------------
+    print("== shell: settings nav rail lists both sections; Help + collapse exist ==")
+    titles = shell.settings.section_titles()
+    for name in ("General", "Audio", "Transcription", "AI", "Integrations", "About",
+                 "Account", "Plans & Billing"):
+        check(f"settings nav lists {name}", name in titles)
+    check("help button exists", hasattr(shell, "help_btn"))
+    check("help page exists", hasattr(shell, "help"))
+    check("collapse button exists", hasattr(shell, "collapse_btn"))
+
+    print("== shell: sidebar collapse round-trips and persists to cfg ==")
+    check("sidebar starts visible", not shell.sidebar.isHidden())
+    shell.toggle_sidebar()
+    app.processEvents()
+    check("sidebar hidden after collapse", shell.sidebar.isHidden())
+    check("cfg.sidebar_collapsed persisted", shell.cfg.sidebar_collapsed is True)
+    check("floating expand button shown", not shell.expand_btn.isHidden())
+    shell.toggle_sidebar()
+    app.processEvents()
+    check("sidebar visible after expand", not shell.sidebar.isHidden())
+    check("expand button hidden again", shell.expand_btn.isHidden())
 
     # ---------------------------------------------------------------
     print("== sidebar CTA reflects a live recording ==")
@@ -170,21 +192,21 @@ def main() -> int:
     set_repo.close()
 
     # ---------------------------------------------------------------
-    print("== theme toggle slider: invoking it flips cfg.theme_mode / theme.mode both ways ==")
+    print("== theme icon button: clicking it flips cfg.theme_mode / theme.mode both ways ==")
     slider_repo = new_repo()
     scfg = Config()
     stheme = ThemeController(scfg)
     stheme.apply()
     sshell = Shell(slider_repo, scfg, stheme)
     app.processEvents()
-    check("theme_toggle widget exists", hasattr(sshell, "theme_toggle"))
+    check("theme_btn widget exists", hasattr(sshell, "theme_btn"))
 
     start_mode = stheme.mode
-    sshell.theme_toggle._on_toggle()
+    sshell.theme_btn.click()
     app.processEvents()
     check("first toggle flips theme.mode", stheme.mode != start_mode)
     check("first toggle flips cfg.theme_mode", scfg.theme_mode == stheme.mode)
-    sshell.theme_toggle._on_toggle()
+    sshell.theme_btn.click()
     app.processEvents()
     check("second toggle flips theme.mode back", stheme.mode == start_mode)
     check("second toggle flips cfg.theme_mode back", scfg.theme_mode == stheme.mode)
@@ -211,12 +233,13 @@ def main() -> int:
     check("sidebar account card name updates immediately", ashell.account_card.name_lbl.text() == "Hayden Whittle")
     check("sidebar account card avatar initial updates immediately", ashell.account_card.avatar.text() == "H")
 
-    print("== account card: clicking it navigates to the Account page ==")
+    print("== account card: clicking it opens Settings on the Account section ==")
     ashell.show_home()
     app.processEvents()
     ashell.account_card._on_click()
     app.processEvents()
-    check("clicking the account card shows the account page", ashell.stack.currentWidget() is ashell.account)
+    check("clicking the account card shows settings", ashell.stack.currentWidget() is ashell.settings)
+    check("account section selected via account card", ashell.settings._current_key == "account")
     acc_repo.close()
 
     # ---------------------------------------------------------------

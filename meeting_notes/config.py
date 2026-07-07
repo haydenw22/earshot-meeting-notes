@@ -100,6 +100,7 @@ class Config:
     theme_mode: str = "light"             # "light" | "dark"
     sidebar_width: int = 258              # resizable; persisted
     sidebar_side: str = "left"            # "left" | "right"
+    sidebar_collapsed: bool = False       # sidebar hidden (the panel toggle button)
     show_dashboard: bool = True           # show the pending-action-items dashboard on Home
     dashboard_collapsed: bool = False     # collapsed/expanded state of the to-do card on Home
     meetings_collapsed: bool = False      # collapsed/expanded state of the Home meeting list

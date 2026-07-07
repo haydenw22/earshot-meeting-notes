@@ -51,9 +51,11 @@ def build(out_dir: Path, mode: str) -> None:
     cfg.theme_mode = mode
     tmp = tempfile.mkdtemp()
     repo = MeetingRepository(dbmod.connect(Path(tmp) / "shot.db"))
+    folder = repo.create_folder("Marketing", "#6366F1")
     first_id = None
-    for title, att, status, notes in SAMPLES:
-        m = repo.create(date_text="25th June 2026", date_iso="2026-06-25", attendees=att)
+    for i, (title, att, status, notes) in enumerate(SAMPLES):
+        m = repo.create(date_text="25th June 2026", date_iso="2026-06-25", attendees=att,
+                        folder_id=folder.id if i < 2 else None)
         repo.update(m.id, title=title, status=status, duration_secs=1875,
                     transcript="[00:00] Me: Hi everyone, thanks for joining.\n"
                                "[00:04] Them: Great to be here — shall we start with the funnel?\n"
@@ -65,7 +67,7 @@ def build(out_dir: Path, mode: str) -> None:
     theme = ThemeController(cfg)
     theme.apply()
     shell = Shell(repo, cfg, theme)
-    shell.resize(1180, 760)
+    shell.resize(1336, 843)  # the app's default viewport
     app = QApplication.instance()
     shell.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)  # render, don't display
     shell.show()
@@ -80,7 +82,12 @@ def build(out_dir: Path, mode: str) -> None:
     shell.show_home(); shot("home")
     shell.show_record(); shot("record")
     shell.open_meeting(first_id); shot("detail")
-    shell.show_settings(); shot("settings")
+    shell.show_project(folder.id); shot("project")
+    shell.show_settings("general"); shot("settings")
+    shell.show_settings("integrations"); shot("integrations")
+    shell.show_settings("account"); shot("account")
+    shell.show_settings("plans"); shot("plans")
+    shell.show_help(); shot("help")
     repo.close()
 
 

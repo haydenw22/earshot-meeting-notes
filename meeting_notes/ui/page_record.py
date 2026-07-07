@@ -533,7 +533,7 @@ class RecordPage(QWidget):
     def _populate_folder_combo(self, *, select_folder_id=None) -> None:
         self.folder_combo.blockSignals(True)
         self.folder_combo.clear()
-        self.folder_combo.addItem("No project", None)
+        self.folder_combo.addItem("Uncategorized", None)
         for f in self.repo.list_folders():
             self.folder_combo.addItem(icons.icon("folder", f.color, 16), f.name, f.id)
         self.folder_combo.addItem("＋ New project…", "__new__")

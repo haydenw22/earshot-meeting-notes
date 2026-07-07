@@ -19,6 +19,39 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.29.0", "2026-07-07", "UI overhaul: unified Settings, Plans & Billing, Help Center",
+        (
+            ("Added", (
+                "Settings is now one place for everything, with sections down the side: "
+                "General, Audio, Transcription, AI, Integrations and About, plus a new "
+                "ACCOUNT area. The Account and Integrations pages moved in from the sidebar.",
+                "A new Plans & Billing page shows the Free and Plus plans side by side, "
+                "your trial or renewal status, and this month's transcription usage.",
+                "A Help button in the sidebar opens the new built-in Help Center: a "
+                "getting-started guide plus tips for recording, transcription, AI notes, "
+                "projects and troubleshooting.",
+                "The sidebar can be collapsed with the panel button at its top, giving "
+                "your notes the whole window. A floating button brings it back.",
+                "A Plus or Plus Trial badge appears next to the logo when you're signed "
+                "in, and a card above Settings reminds you to upgrade before a trial "
+                "ends or to renew when auto-renewal is off.",
+            )),
+            ("Changed", (
+                "Meeting notes no longer crowd the sidebar. A collapsible PROJECTS "
+                "dropdown lists just your projects; clicking one opens it in the main "
+                "window with all of its meetings. Notes that aren't in a project live "
+                "in a built-in Uncategorized project, and every meeting row has the "
+                "usual open / move / delete menu.",
+                "Searching now opens a results page in the main window instead of "
+                "squeezing matches into the sidebar.",
+                "The app opens in a larger window (1336 x 843) so the new layout has "
+                "room to breathe.",
+                "The sidebar is leaner and calmer: the light/dark switch is a small "
+                "button at the top, and the version number now lives in Settings.",
+            )),
+        ),
+    ),
+    Release(
         "0.28.1", "2026-07-07", "Test connection no longer freezes the app",
         (
             ("Fixed", (

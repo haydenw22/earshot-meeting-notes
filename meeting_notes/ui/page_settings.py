@@ -1,6 +1,10 @@
-"""Settings: appearance, audio devices + storage, transcription, AI, and About.
+"""Settings: everything in one place, Wispr-Flow style.
 
-Cards inside tabs, matching the rest of the app.
+A left nav rail (SETTINGS: General / Audio / Transcription / AI / Integrations /
+About, ACCOUNT: Account / Plans & Billing) with a stacked pane per section on
+the right. The Account, Plans and Integrations panes are their own page classes
+embedded here; they persist across mode changes while the mode-dependent panes
+(Transcription and AI hide in cloud mode) are rebuilt by refresh_tabs().
 """
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -19,7 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -28,7 +33,11 @@ from .. import __version__, changelog, paths
 from ..audio import devices as dev
 from ..capture import screen as screen_capture
 from ..transcription import whisper_client
+from . import icons
 from .named_list import NamedListManager
+from .page_account import AccountPage
+from .page_integrations import IntegrationsPage
+from .page_plans import PlansPage
 from .widgets import Card, calm_scroll_children, run_connection_test
 
 # One-click fills for the OpenAI-compatible transcription provider.
@@ -44,69 +53,203 @@ ONLINE_PRESETS = [
      "https://api.openai.com/v1", "whisper-1"),
 ]
 
+# panes that edit config through the shared "Save changes" button
+_EDITABLE = {"general", "audio", "transcription", "ai"}
+
 
 class SettingsPage(QWidget):
     def __init__(self, shell, repo, cfg, theme):
         super().__init__()
         self.shell = shell
+        self.repo = repo
         self.cfg = cfg
         self.theme = theme
+        # persistent embedded pages — they manage their own state/refresh and
+        # must survive refresh_tabs() (a sign-in can be triggered FROM them)
+        self.account_page = AccountPage(shell, repo, cfg, theme)
+        self.plans_page = PlansPage(shell, repo, cfg, theme)
+        self.integrations_page = IntegrationsPage(shell, repo, cfg, theme)
+        self._nav_buttons: dict[str, QPushButton] = {}
+        self._pane_widgets: dict[str, QWidget] = {}
+        self._current_key = "general"
         self._build()
 
+    # ---------- construction ----------
     def _build(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(40, 28, 40, 28)
-        root.setSpacing(16)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
 
-        head = QLabel("Settings")
-        head.setObjectName("H1")
-        root.addWidget(head)
+        self.nav = QFrame()
+        self.nav.setObjectName("SettingsNav")
+        self.nav.setFixedWidth(208)
+        self._nav_lay = QVBoxLayout(self.nav)
+        self._nav_lay.setContentsMargins(14, 22, 14, 14)
+        self._nav_lay.setSpacing(3)
+        row.addWidget(self.nav)
 
-        self.tabs = QTabWidget()
-        self._build_tabs()
-        root.addWidget(self.tabs, 1)
+        right = QWidget()
+        rlay = QVBoxLayout(right)
+        rlay.setContentsMargins(0, 0, 0, 0)
+        rlay.setSpacing(0)
+        self.stack = QStackedWidget()
+        rlay.addWidget(self.stack, 1)
 
-        bar = QHBoxLayout()
+        self.save_bar = QWidget()
+        bar = QHBoxLayout(self.save_bar)
+        bar.setContentsMargins(40, 8, 40, 20)
         bar.addStretch(1)
         self.save_btn = QPushButton("Save changes")
         self.save_btn.setProperty("variant", "primary")
         self.save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_btn.clicked.connect(self._save)
         bar.addWidget(self.save_btn)
-        root.addLayout(bar)
+        rlay.addWidget(self.save_bar)
+        row.addWidget(right, 1)
+
+        self._build_sections()
         self.apply_theme()
 
-    def _build_tabs(self) -> None:
-        """(Re)build the tab set for the current account mode. In cloud mode the
-        Transcription and AI tabs are hidden — Earshot Plus manages both, so
-        there's nothing to configure — leaving General / Audio / About."""
-        # clear() detaches the old pages but never destroys them — they stay
-        # alive parented under the tab widget's internal stack, so every
-        # sign-in/out and "Run setup guide again" leaked ~one full tab set.
-        # Delete them explicitly.
-        for i in range(self.tabs.count()):
-            w = self.tabs.widget(i)
+    def _build_sections(self) -> None:
+        """(Re)build the nav rail + pane stack for the current account mode. In
+        cloud mode the Transcription and AI panes are omitted — Earshot Plus
+        manages both. The embedded Account/Plans/Integrations pages are re-used,
+        never destroyed; the config-editing panes are rebuilt fresh."""
+        # clear the nav rail
+        while self._nav_lay.count():
+            item = self._nav_lay.takeAt(0)
+            w = item.widget()
             if w is not None:
+                w.deleteLater()
+        # clear the stack; delete only the rebuildable panes
+        persistent = {self.account_page, self.plans_page, self.integrations_page}
+        while self.stack.count():
+            w = self.stack.widget(0)
+            self.stack.removeWidget(w)
+            if w in persistent:
+                w.setParent(None)
+            else:
                 w.setParent(None)
                 w.deleteLater()
-        self.tabs.clear()
+        self._nav_buttons.clear()
+        self._pane_widgets.clear()
+
         self._cloud_mode = self.cfg.account_mode == "cloud"
-        self.tabs.addTab(self._general_tab(), "General")
-        self.tabs.addTab(self._audio_tab(), "Audio")
+
+        sections: list[tuple[str, str, str, QWidget]] = [
+            ("general", "General", "sliders", self._general_pane()),
+            ("audio", "Audio", "volume", self._audio_pane()),
+        ]
         if not self._cloud_mode:
-            self.tabs.addTab(self._transcription_tab(), "Transcription")
-            self.tabs.addTab(self._ai_tab(), "AI")
-        self.tabs.addTab(self._about_tab(), "About")
-        # scrolling the page must never change a control it passes over.
-        # Sweep self.tabs (not self): at initial build the tab widget isn't
-        # parented into the page yet, so findChildren(self) would find nothing.
-        calm_scroll_children(self.tabs)
+            sections.append(("transcription", "Transcription", "globe", self._transcription_pane()))
+            sections.append(("ai", "AI", "sparkles", self._ai_pane()))
+        sections.append(("integrations", "Integrations", "zap", self.integrations_page))
+        sections.append(("about", "About", "info", self._about_pane()))
+        account_sections: list[tuple[str, str, str, QWidget]] = [
+            ("account", "Account", "user", self.account_page),
+            ("plans", "Plans & Billing", "credit-card", self.plans_page),
+        ]
+
+        head = QLabel("SETTINGS")
+        head.setObjectName("SectionLabel")
+        head.setContentsMargins(10, 0, 0, 4)
+        self._nav_lay.addWidget(head)
+        for key, title, icon_name, widget in sections:
+            self._add_section(key, title, icon_name, widget)
+
+        acc_head = QLabel("ACCOUNT")
+        acc_head.setObjectName("SectionLabel")
+        acc_head.setContentsMargins(10, 14, 0, 4)
+        self._nav_lay.addWidget(acc_head)
+        for key, title, icon_name, widget in account_sections:
+            self._add_section(key, title, icon_name, widget)
+
+        self._nav_lay.addStretch(1)
+        ver = QLabel(f"Earshot v{__version__}")
+        ver.setObjectName("Faint")
+        ver.setContentsMargins(10, 0, 0, 0)
+        self._nav_lay.addWidget(ver)
+
+        # scrolling a pane must never change a control it passes over
+        calm_scroll_children(self.stack)
+
+        if self._current_key not in self._pane_widgets:
+            self._current_key = "general"
+        self.show_section(self._current_key)
+
+    def _add_section(self, key: str, title: str, icon_name: str, widget: QWidget) -> None:
+        self.stack.addWidget(widget)
+        self._pane_widgets[key] = widget
+        # "&" is Qt's mnemonic marker in button text — escape it or "Plans &
+        # Billing" renders as "Plans Billing"
+        btn = QPushButton("  " + title.replace("&", "&&"))
+        btn.setProperty("variant", "ghost")
+        btn.setProperty("icon_name", icon_name)
+        btn.setProperty("section_title", title)
+        btn.setCheckable(True)
+        btn.setMinimumHeight(36)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _=False, k=key: self.show_section(k))
+        self._nav_buttons[key] = btn
+        self._nav_lay.addWidget(btn)
+
+    # ---------- navigation ----------
+    def show_section(self, key: str) -> None:
+        """Switch to a settings section by key: general / audio / transcription /
+        ai / integrations / about / account / plans."""
+        if key not in self._pane_widgets:
+            key = "general"
+        self._current_key = key
+        self.stack.setCurrentWidget(self._pane_widgets[key])
+        for k, b in self._nav_buttons.items():
+            b.setChecked(k == key)
+        self._retint_nav()
+        self.save_bar.setVisible(key in _EDITABLE)
+        if key == "account":
+            self.account_page.refresh()
+        elif key == "plans":
+            self.plans_page.refresh()
+
+    def _retint_nav(self) -> None:
+        for _key, btn in self._nav_buttons.items():
+            name = btn.property("icon_name") or "settings"
+            color = "primary" if btn.isChecked() else "text_muted"
+            btn.setIcon(icons.icon(name, self.theme.color(color), 16))
+
+    def section_titles(self) -> list[str]:
+        """Visible section names, in nav order (used by tests)."""
+        return [b.property("section_title") for b in self._nav_buttons.values()]
 
     def refresh_tabs(self) -> None:
-        """Rebuild the tabs after the account mode changes (sign in / out), so the
-        Transcription and AI tabs appear or disappear immediately."""
-        self._build_tabs()
+        """Rebuild the sections after the account mode changes (sign in / out) so
+        the Transcription and AI panes appear or disappear immediately."""
+        self._build_sections()
         self.apply_theme()
+
+    # ---------- pane scaffolding ----------
+    def _pane(self, title: str, subtitle: str = "") -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(40, 28, 40, 8)
+        outer.setSpacing(6)
+        head = QLabel(title)
+        head.setObjectName("H1")
+        outer.addWidget(head)
+        if subtitle:
+            sub = QLabel(subtitle)
+            sub.setObjectName("Muted")
+            sub.setWordWrap(True)
+            outer.addWidget(sub)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(2, 14, 2, 2)
+        lay.setSpacing(16)
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+        return page, lay
 
     def _card(self, title: str, subtitle: str = "") -> tuple[Card, QVBoxLayout]:
         card = Card()
@@ -123,24 +266,9 @@ class SettingsPage(QWidget):
             lay.addWidget(s)
         return card, lay
 
-    def _tab(self) -> tuple[QWidget, QVBoxLayout]:
-        outer_w = QWidget()
-        outer = QVBoxLayout(outer_w)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        host = QWidget()
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(2, 16, 2, 2)
-        lay.setSpacing(16)
-        scroll.setWidget(host)
-        outer.addWidget(scroll)
-        return outer_w, lay
-
     # ---------- General ----------
-    def _general_tab(self) -> QWidget:
-        w, lay = self._tab()
+    def _general_pane(self) -> QWidget:
+        w, lay = self._pane("General", "How Earshot looks and behaves.")
         card, cl = self._card("Appearance", "Choose how the app looks.")
         row = QHBoxLayout()
         self.light_btn = QPushButton("  Light")
@@ -276,7 +404,7 @@ class SettingsPage(QWidget):
         self.cfg.overlay_pos_y = OVERLAY_AUTO_POS
         self.cfg.save()
         # if an overlay is currently up (recording), move it back immediately
-        ov = getattr(self.shell.record, "overlay", None)
+        ov = getattr(getattr(self.shell, "record", None), "overlay", None)
         if ov is not None:
             ov._place()
         self.overlay_reset_label.setText("Moved back to the top-right.")
@@ -290,8 +418,8 @@ class SettingsPage(QWidget):
         self.side_right_btn.setChecked(self.cfg.sidebar_side == "right")
 
     # ---------- Audio ----------
-    def _audio_tab(self) -> QWidget:
-        w, lay = self._tab()
+    def _audio_pane(self) -> QWidget:
+        w, lay = self._pane("Audio", "Devices and where recordings are stored.")
 
         card, cl = self._card("Default devices", "Pre-selected when you start a new recording.")
         form = QFormLayout()
@@ -359,8 +487,8 @@ class SettingsPage(QWidget):
         self.data_dir_label.setText(folder or "(default app folder)")
 
     # ---------- Transcription ----------
-    def _transcription_tab(self) -> QWidget:
-        w, lay = self._tab()
+    def _transcription_pane(self) -> QWidget:
+        w, lay = self._pane("Transcription", "Where your audio gets transcribed.")
 
         src_card, scl = self._card("Transcription source", "Where your audio gets transcribed.")
         self.provider_combo = QComboBox()
@@ -500,8 +628,8 @@ class SettingsPage(QWidget):
         run_connection_test(self, self.test_btn, self.test_label, self.theme, probe)
 
     # ---------- AI ----------
-    def _ai_tab(self) -> QWidget:
-        w, lay = self._tab()
+    def _ai_pane(self) -> QWidget:
+        w, lay = self._pane("AI", "The model that writes your notes, briefs and answers.")
 
         prov_card, pcl = self._card(
             "AI model",
@@ -675,8 +803,8 @@ class SettingsPage(QWidget):
         return w
 
     # ---------- About ----------
-    def _about_tab(self) -> QWidget:
-        w, lay = self._tab()
+    def _about_pane(self) -> QWidget:
+        w, lay = self._pane("About", "Version and release notes.")
         card, cl = self._card("Earshot", f"Version {__version__}")
         body = QLabel(
             "Earshot records you and the other side on separate channels, transcribes on "
@@ -733,7 +861,7 @@ class SettingsPage(QWidget):
 
     # ---------- save ----------
     def _save(self) -> None:
-        # In cloud mode the Transcription + AI tabs aren't built, so their widgets
+        # In cloud mode the Transcription + AI panes aren't built, so their widgets
         # don't exist — skip persisting them (Earshot Plus manages both). The
         # underlying cfg keys are left untouched so signing out restores them.
         if not getattr(self, "_cloud_mode", False):
@@ -774,15 +902,15 @@ class SettingsPage(QWidget):
         self.cfg.call_detect_enabled = self.call_detect.isChecked()
         self.cfg.overlay_enabled = self.overlay_enabled.isChecked()
         self.cfg.overlay_opacity = self.overlay_opacity.value() / 100.0
-        ov = getattr(self.shell.record, "overlay", None)
+        ov = getattr(getattr(self.shell, "record", None), "overlay", None)
         if ov is not None:
             ov.set_opacity(self.cfg.overlay_opacity)
-        # webhook_url / webhook_when / todoist_token now live on the Integrations
-        # page (moved in Phase D) — saved by IntegrationsPage._save(), not here.
-        # (Custom instructions / templates / saved AI actions are persisted in the
-        # self-host branch above, alongside the rest of the AI-tab fields.)
+        # webhook_url / webhook_when / todoist_token live on the Integrations
+        # pane — saved by IntegrationsPage._save(), not here.
         self.cfg.save()
-        self.shell.home.refresh()  # reflect the dashboard toggle immediately
+        home = getattr(self.shell, "home", None)
+        if home is not None:
+            home.refresh()  # reflect the dashboard toggle immediately
         self.save_btn.setText("Saved ✓")
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1400, lambda: self.save_btn.setText("Save changes"))
@@ -792,8 +920,13 @@ class SettingsPage(QWidget):
         self.dark_btn.setIcon(self.theme.icon("moon", "text", 18))
         self.side_left_btn.setIcon(self.theme.icon("chevron-left", "text", 16))
         self.side_right_btn.setIcon(self.theme.icon("chevron-right", "text", 16))
-        # the Transcription tab (and its Test button) is absent in cloud mode
+        # the Transcription pane (and its Test button) is absent in cloud mode
         if hasattr(self, "test_btn"):
             self.test_btn.setIcon(self.theme.icon("globe", "text_muted", 16))
+        self._retint_nav()
         self._sync_theme_buttons()
         self._sync_side_buttons()
+        # cascade to the embedded pages (the shell only calls ours)
+        self.account_page.apply_theme()
+        self.plans_page.apply_theme()
+        self.integrations_page.apply_theme()

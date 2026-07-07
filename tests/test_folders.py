@@ -100,94 +100,89 @@ def main() -> int:
     repo.close()
 
     # ---------------------------------------------------------------
-    print("== shell: sidebar tree + list with 1 folder / 1 filed / 1 unfiled ==")
+    print("== shell: sidebar project rows with 1 folder / 1 filed / 1 uncategorized ==")
     shell_repo = new_repo()
     folder = shell_repo.create_folder("Client X", "#6366F1")
     filed = shell_repo.create(date_text="d", date_iso="2026-07-02", attendees=[], folder_id=folder.id)
     shell_repo.update(filed.id, title="Filed meeting")
     unfiled = shell_repo.create(date_text="d", date_iso="2026-07-02", attendees=[])
-    shell_repo.update(unfiled.id, title="Unfiled meeting")
+    shell_repo.update(unfiled.id, title="Loose meeting")
 
     shell = Shell(shell_repo, Config(), theme)
     app.processEvents()
 
-    check("tree has exactly 1 top-level folder item", shell.folder_tree.topLevelItemCount() == 1)
-    folder_item = shell.folder_tree.topLevelItem(0)
-    check("folder item shows name + count", folder_item.text(0) == "Client X (1)")
-    check("folder item has exactly 1 child (the filed meeting)", folder_item.childCount() == 1)
-    check("that child is the filed meeting",
-          folder_item.child(0).data(0, Qt.ItemDataRole.UserRole) == ("meeting", filed.id))
-    check("meeting_list has exactly 1 item (the unfiled meeting)", shell.meeting_list.count() == 1)
-    check("that item is the unfiled meeting",
-          shell.meeting_list.item(0).data(Qt.ItemDataRole.UserRole) == unfiled.id)
+    rows = shell._project_rows
+    check("one row per folder + the Uncategorized row", set(rows.keys()) == {folder.id, None})
+    check("folder row shows name + count", "Client X" in rows[folder.id].text() and "(1)" in rows[folder.id].text())
+    check("Uncategorized row shows its count", "Uncategorized" in rows[None].text() and "(1)" in rows[None].text())
+    check("no meeting rows live in the sidebar any more",
+          not hasattr(shell, "meeting_list") and not hasattr(shell, "folder_tree"))
 
-    print("== shell: expanded state is preserved across notify_data_changed() ==")
-    folder_item.setExpanded(False)
+    print("== shell: clicking a project opens it in the main window ==")
+    shell.show_project(folder.id)
     app.processEvents()
+    check("project page is the current widget", shell.stack.currentWidget() is shell.project)
+    check("project page shows the folder name", shell.project.h1.text() == "Client X")
+    check("its row is highlighted", shell._project_rows[folder.id].isChecked())
+    check("other rows are not", not shell._project_rows[None].isChecked())
+
+    shell.show_project(None)
+    app.processEvents()
+    check("Uncategorized opens as a project", shell.project.h1.text() == "Uncategorized")
+    check("Uncategorized row is highlighted", shell._project_rows[None].isChecked())
+
+    print("== shell: counts + open project refresh on notify_data_changed ==")
+    shell_repo.update(unfiled.id, folder_id=folder.id)
     shell.notify_data_changed()
     app.processEvents()
-    folder_item2 = shell.folder_tree.topLevelItem(0)
-    check("folder stays collapsed after a rebuild", folder_item2.isExpanded() is False)
-    folder_item2.setExpanded(True)
+    check("folder count updates", "(2)" in shell._project_rows[folder.id].text())
+    check("Uncategorized count updates", "(0)" in shell._project_rows[None].text())
+    shell_repo.update(unfiled.id, folder_id=None)
     shell.notify_data_changed()
     app.processEvents()
-    folder_item3 = shell.folder_tree.topLevelItem(0)
-    check("folder stays expanded after a rebuild", folder_item3.isExpanded() is True)
+    check("moving back updates counts again", "(1)" in shell._project_rows[None].text())
 
-    print("== shell: search text filters tree children ==")
-    shell._filter_list("Filed")
+    print("== shell: search opens results in the main window; clearing returns home ==")
+    shell.search.setText("Filed")
+    shell._run_search()
     app.processEvents()
-    check("matching child stays visible", not folder_item3.child(0).isHidden())
-    check("folder row stays visible (has a visible child)", not folder_item3.isHidden())
-    shell._filter_list("zzz_no_such_meeting_zzz")
+    check("search shows the project page in search mode",
+          shell.stack.currentWidget() is shell.project and shell.project.mode[0] == "search")
+    check("search results count the matching meeting", 'for "Filed"' in shell.project.count.text())
+    shell.search.setText("")
+    shell._run_search()
     app.processEvents()
-    check("non-matching child is hidden", folder_item3.child(0).isHidden())
-    check("folder with no visible children is hidden too", folder_item3.isHidden())
-    shell._filter_list("")
-    app.processEvents()
-    check("clearing search shows everything again", not folder_item3.isHidden() and not folder_item3.child(0).isHidden())
+    check("clearing the box returns to home", shell.stack.currentWidget() is shell.home)
 
-    print("== shell: drop callback moves a meeting between list <-> tree ==")
-    shell._on_meeting_dropped_on_folder(unfiled.id, folder.id)
-    app.processEvents()
-    check("unfiled meeting now filed", shell_repo.get(unfiled.id).folder_id == folder.id)
-    check("meeting_list now empty", shell.meeting_list.count() == 0)
-    check("folder now has 2 children", shell.folder_tree.topLevelItem(0).childCount() == 2)
-
-    shell._on_meeting_dropped_on_folder(unfiled.id, None)
-    app.processEvents()
-    check("dropping on the list unfiles the meeting", shell_repo.get(unfiled.id).folder_id is None)
-    check("meeting_list has the meeting back", shell.meeting_list.count() == 1)
-    check("folder back down to 1 child", shell.folder_tree.topLevelItem(0).childCount() == 1)
-
-    print("== shell: folders_collapsed persists + hides the tree ==")
+    print("== shell: folders_collapsed persists + hides the project rows ==")
     cfg2 = Config()
     check("folders_collapsed defaults False", cfg2.folders_collapsed is False)
     shell._toggle_folders_collapsed()
-    check("tree hidden after collapsing", shell.folder_tree.isHidden())
+    check("project rows hidden after collapsing", shell.projects_host.isHidden())
     check("cfg.folders_collapsed now True", shell.cfg.folders_collapsed is True)
     shell._toggle_folders_collapsed()
-    check("tree visible again after expanding", not shell.folder_tree.isHidden())
+    check("project rows visible again after expanding", not shell.projects_host.isHidden())
 
-    print("== shell: new-folder / rename / delete-folder round-trip through the repo ==")
+    print("== shell: new-folder round-trips through the repo into the sidebar ==")
     before = len(shell_repo.list_folders())
     shell_repo.create_folder("Second Folder", "#F59E0B")
     shell.notify_data_changed()
     app.processEvents()
     check("a directly-created folder shows up after notify_data_changed",
-          len(shell_repo.list_folders()) == before + 1 and shell.folder_tree.topLevelItemCount() == before + 1)
+          len(shell_repo.list_folders()) == before + 1
+          and len(shell._project_rows) == before + 2)  # + the Uncategorized row
 
     shell_repo.close()
 
     # ---------------------------------------------------------------
-    print("== record page: folder_combo lists 'No project' + created folders ==")
+    print("== record page: folder_combo lists 'Uncategorized' + created folders ==")
     rec_repo = new_repo()
     rf = rec_repo.create_folder("Sales", "#22C55E")
     record = RecordPage(_Shell(), rec_repo, Config(), theme)
     record.on_shown()
     app.processEvents()
     combo_texts = [record.folder_combo.itemText(i) for i in range(record.folder_combo.count())]
-    check("folder_combo starts with 'No project'", combo_texts[0] == "No project")
+    check("folder_combo starts with 'Uncategorized'", combo_texts[0] == "Uncategorized")
     check("folder_combo lists the created folder", "Sales" in combo_texts)
     check("folder_combo ends with the 'New project' entry", combo_texts[-1].endswith("New project…"))
 
@@ -203,11 +198,11 @@ def main() -> int:
     created = rec_repo.create(date_text="d", date_iso="2026-07-02", attendees=[], folder_id=resolved_folder_id)
     check("meeting created this way carries the folder_id", rec_repo.get(created.id).folder_id == rf.id)
 
-    # data=None ("No project") must resolve to folder_id=None, and the sentinel
+    # data=None ("Uncategorized") must resolve to folder_id=None, and the sentinel
     # "__new__" (if somehow left selected) must never leak into repo.create()
     record.folder_combo.setCurrentIndex(0)
     folder_data0 = record.folder_combo.currentData()
-    check("'No project' resolves to folder_id=None", (folder_data0 if folder_data0 != "__new__" else None) is None)
+    check("'Uncategorized' resolves to folder_id=None", (folder_data0 if folder_data0 != "__new__" else None) is None)
     rec_repo.close()
 
     # ---------------------------------------------------------------
@@ -234,7 +229,7 @@ def main() -> int:
     home._set_folder_filter("unfiled")
     check("unfiled filter -> only the 1 unfiled meeting",
           [m.title for m in home._filtered_meetings(home_repo.list())] == ["C"])
-    check("count label reflects unfiled", home.count.text() == "1 in Unfiled")
+    check("count label reflects uncategorized", home.count.text() == "1 in Uncategorized")
 
     home._set_folder_filter(None)
     check("back to All -> 3 again", len(home._filtered_meetings(home_repo.list())) == 3)
@@ -264,12 +259,12 @@ def main() -> int:
     scope_texts = [ask_page.scope_combo.itemText(i) for i in range(ask_page.scope_combo.count())]
     check("scope combo starts with 'All meetings'", scope_texts[0] == "All meetings")
     check("scope combo lists the folder", "Legal" in scope_texts)
-    check("scope combo lists 'Unfiled'", "Unfiled" in scope_texts)
+    check("scope combo lists 'Uncategorized'", "Uncategorized" in scope_texts)
     check("scope combo lists recent meetings", "Filed one" in scope_texts and "Unfiled one" in scope_texts)
     ask_repo.close()
 
     # ---------------------------------------------------------------
-    print("== detail page: move_menu lists 'No project' + folders; triggering moves the meeting ==")
+    print("== detail page: move_menu lists 'Uncategorized' + folders; triggering moves the meeting ==")
     det_repo = new_repo()
     df = det_repo.create_folder("Ops", "#14B8A6")
     dm = det_repo.create(date_text="d", date_iso="2026-07-02", attendees=[])
@@ -279,7 +274,7 @@ def main() -> int:
     page = DetailPage(detail_shell, det_repo, Config(), theme)
     page.load(dm.id)
     move_texts = [a.text() for a in page.move_menu.actions()]
-    check("move_menu contains 'No project'", "No project" in move_texts)
+    check("move_menu contains 'Uncategorized'", "Uncategorized" in move_texts)
     check("move_menu contains the Ops folder", "Ops" in move_texts)
     check("move_menu contains 'New project…'", "New project…" in move_texts)
 
@@ -294,7 +289,7 @@ def main() -> int:
     check("shell was notified so the sidebar refreshes", getattr(detail_shell, "notified", False))
 
     page._move_to_folder(None)
-    check("moving back to 'No project' unfiles the meeting", det_repo.get(dm.id).folder_id is None)
+    check("moving back to 'Uncategorized' unfiles the meeting", det_repo.get(dm.id).folder_id is None)
     det_repo.close()
 
     print("\nFOLDERS TESTS PASSED")

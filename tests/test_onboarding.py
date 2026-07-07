@@ -214,14 +214,14 @@ def main() -> int:
     shell = _Shell()
     spage = SettingsPage(shell, set_repo, scfg, theme)
     app.processEvents()
-    tab_texts = [spage.tabs.tabText(i) for i in range(spage.tabs.count())]
+    tab_texts = spage.section_titles()
     check("selfhost shows the Transcription tab", "Transcription" in tab_texts)
     check("selfhost shows the AI tab", "AI" in tab_texts)
 
     scfg.account_mode = "cloud"
     spage.refresh_tabs()
     app.processEvents()
-    cloud_tabs = [spage.tabs.tabText(i) for i in range(spage.tabs.count())]
+    cloud_tabs = spage.section_titles()
     check("cloud HIDES the Transcription tab", "Transcription" not in cloud_tabs)
     check("cloud HIDES the AI tab", "AI" not in cloud_tabs)
     check("cloud keeps the General tab", "General" in cloud_tabs)
@@ -232,7 +232,7 @@ def main() -> int:
     scfg.account_mode = "selfhost"
     spage.refresh_tabs()
     app.processEvents()
-    back_tabs = [spage.tabs.tabText(i) for i in range(spage.tabs.count())]
+    back_tabs = spage.section_titles()
     check("Transcription tab reappears after sign-out", "Transcription" in back_tabs)
     check("AI tab reappears after sign-out", "AI" in back_tabs)
 

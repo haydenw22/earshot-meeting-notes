@@ -263,7 +263,7 @@ class DetailPage(QWidget):
         # read as one congruent control
         here = m.folder_id is None
         add("check" if here else "folder", self.theme.color("text_faint"),
-            "No project", lambda _=False: self._move_to_folder(None))
+            "Uncategorized", lambda _=False: self._move_to_folder(None))
 
         for f in self.repo.list_folders():
             here = m.folder_id == f.id
