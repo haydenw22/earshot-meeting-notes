@@ -19,6 +19,18 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.29.3", "2026-07-07", "Ask Earshot search picker shows projects",
+        (
+            ("Fixed", (
+                "In Ask Earshot's search dropdown, meetings filed in a project looked like "
+                "they were \"Uncategorized\": the list of individual meetings sat under an "
+                "invisible divider with no project information. The dropdown now has clear "
+                "\"Projects\" and \"A single meeting\" groups, and every filed meeting shows "
+                "its project name with a project-coloured icon.",
+            )),
+        ),
+    ),
+    Release(
         "0.29.2", "2026-07-07", "Help button fixed",
         (
             ("Fixed", (

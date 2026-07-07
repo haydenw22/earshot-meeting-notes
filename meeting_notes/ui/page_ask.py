@@ -121,22 +121,50 @@ class AskPage(QWidget):
         self._populate_scope_combo()
 
     # ---------- scope (which meetings to search) ----------
+    def _add_scope_header(self, text: str) -> None:
+        """A non-selectable section header inside the scope dropdown, so the
+        project list and the single-meeting list read as separate groups (a
+        bare separator was invisible enough that recent meetings looked like
+        they were filed under whatever row sat above them)."""
+        from PySide6.QtGui import QColor
+
+        idx = self.scope_combo.count()
+        self.scope_combo.addItem(text)
+        item = self.scope_combo.model().item(idx)
+        if item is not None:
+            item.setEnabled(False)
+            item.setForeground(QColor(self.theme.color("text_faint")))
+
     def _populate_scope_combo(self) -> None:
         current = self.scope_combo.currentData() if self.scope_combo.count() else None
         self.scope_combo.blockSignals(True)
         self.scope_combo.clear()
         self.scope_combo.addItem("All meetings", None)
-        for f in self.repo.list_folders():
-            idx = self.scope_combo.count()
-            self.scope_combo.addItem(f.name, ("folder", f.id))
-            self.scope_combo.setItemIcon(idx, icons.icon("folder", f.color, 16))
+
+        folders = self.repo.list_folders()
+        folders_by_id = {f.id: f for f in folders}
+        if folders:
+            self._add_scope_header("Projects")
+            for f in folders:
+                idx = self.scope_combo.count()
+                self.scope_combo.addItem(f.name, ("folder", f.id))
+                self.scope_combo.setItemIcon(idx, icons.icon("folder", f.color, 16))
         self.scope_combo.addItem("Uncategorized", "unfiled")
-        self.scope_combo.insertSeparator(self.scope_combo.count())
+
         recent = self.repo.list(limit=_RECENT_MEETINGS_LIMIT)
-        for m in recent:
-            idx = self.scope_combo.count()
-            self.scope_combo.addItem(m.title or "Untitled meeting", ("meeting", m.id))
-            self.scope_combo.setItemIcon(idx, icons.icon("file", self.theme.color("text_muted"), 16))
+        if recent:
+            self._add_scope_header("A single meeting")
+            for m in recent:
+                folder = folders_by_id.get(m.folder_id)
+                # each meeting names its project so nothing looks "uncategorized"
+                label = m.title or "Untitled meeting"
+                if folder is not None:
+                    label = f"{label}   ·  {folder.name}"
+                idx = self.scope_combo.count()
+                self.scope_combo.addItem(label, ("meeting", m.id))
+                color = folder.color if folder is not None else self.theme.color("text_muted")
+                self.scope_combo.setItemIcon(idx, icons.icon("file", color, 16))
+
         if current is not None:
             found = self.scope_combo.findData(current)
             if found >= 0:

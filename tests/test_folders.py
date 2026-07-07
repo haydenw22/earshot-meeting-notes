@@ -256,11 +256,21 @@ def main() -> int:
     ask_page = AskPage(_Shell(), ask_repo, Config(), theme)
     ask_page.on_shown()
     app.processEvents()
-    scope_texts = [ask_page.scope_combo.itemText(i) for i in range(ask_page.scope_combo.count())]
+    combo = ask_page.scope_combo
+    scope_texts = [combo.itemText(i) for i in range(combo.count())]
     check("scope combo starts with 'All meetings'", scope_texts[0] == "All meetings")
     check("scope combo lists the folder", "Legal" in scope_texts)
     check("scope combo lists 'Uncategorized'", "Uncategorized" in scope_texts)
-    check("scope combo lists recent meetings", "Filed one" in scope_texts and "Unfiled one" in scope_texts)
+    # regression: filed meetings must NAME their project (they used to render
+    # bare under an invisible separator, reading as 'Uncategorized')
+    check("filed meeting is labelled with its project",
+          any("Filed one" in t and "Legal" in t for t in scope_texts))
+    check("unfiled meeting has no project suffix", "Unfiled one" in scope_texts)
+    headers = [i for i in range(combo.count())
+               if combo.model().item(i) is not None and not combo.model().item(i).isEnabled()]
+    header_texts = {combo.itemText(i) for i in headers}
+    check("group headers present and non-selectable",
+          "Projects" in header_texts and "A single meeting" in header_texts)
     ask_repo.close()
 
     # ---------------------------------------------------------------
