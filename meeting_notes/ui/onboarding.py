@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 
 from . import icons
 from .page_home import PaintedBackdrop
-from .widgets import Card, make_chip
+from .widgets import Card, make_chip, run_connection_test
 
 # tour slides: (icon, title, body)
 _TOUR = [
@@ -339,19 +339,22 @@ class OnboardingDialog(QDialog):
         self.tr_form.setRowVisible(self.tr_deepgram_key, p == "deepgram")
 
     def _test_transcription(self) -> None:
-        self.tr_test_label.setText("Testing…")
-        self.tr_test_label.repaint()
+        # capture inputs here; the ping runs off-thread so a dead server can't
+        # freeze the wizard for the timeout (worst on the mandatory first run)
         p = self.tr_provider.currentData()
         if p == "online":
             from ..transcription import openai_client
-            ok = openai_client.ping(self.tr_online_base.text().strip(), self.tr_online_key.text().strip())
+            base, key = self.tr_online_base.text().strip(), self.tr_online_key.text().strip()
+            probe = lambda: openai_client.ping(base, key)  # noqa: E731
         elif p == "deepgram":
             from ..transcription import deepgram_client
-            ok = deepgram_client.ping(self.tr_deepgram_key.text().strip())
+            key = self.tr_deepgram_key.text().strip()
+            probe = lambda: deepgram_client.ping(key)  # noqa: E731
         else:
             from ..transcription import whisper_client
-            ok = whisper_client.ping(self.tr_url.text().strip())
-        self._set_test_label(self.tr_test_label, ok)
+            url = self.tr_url.text().strip()
+            probe = lambda: whisper_client.ping(url)  # noqa: E731
+        run_connection_test(self, self.tr_test_btn, self.tr_test_label, self.theme, probe)
 
     # ---------- self-host: AI ----------
     def _selfhost_ai_page(self) -> QWidget:
@@ -423,26 +426,21 @@ class OnboardingDialog(QDialog):
             self.ai_form.setRowVisible(wgt, p == "local")
 
     def _test_ai(self) -> None:
-        self.ai_test_label.setText("Testing…")
-        self.ai_test_label.repaint()
         p = self.ai_provider.currentData()
         if p == "openai":
             from ..notes import openai_llm
-            ok = openai_llm.ping(self.ai_llm_base.text().strip(), self.ai_llm_key.text().strip())
+            base, key = self.ai_llm_base.text().strip(), self.ai_llm_key.text().strip()
+            probe = lambda: openai_llm.ping(base, key)  # noqa: E731
         elif p == "local":
             from ..notes import openai_llm
-            ok = openai_llm.ping(self.ai_local_base.text().strip(), "")
+            base = self.ai_local_base.text().strip()
+            probe = lambda: openai_llm.ping(base, "")  # noqa: E731
         else:
-            # Anthropic has no cheap ping endpoint we use elsewhere — treat a
-            # non-empty key (or the env var) as "configured".
-            ok = bool(self.ai_anthropic_key.text().strip() or self.cfg.resolved_anthropic_key())
-        self._set_test_label(self.ai_test_label, ok)
-
-    def _set_test_label(self, label: QLabel, ok: bool) -> None:
-        label.setText("✓ Connected" if ok else "✗ Could not connect")
-        label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
+            # Anthropic has no cheap ping endpoint — a non-empty key (or the env
+            # var) counts as "configured". Instant, but routed uniformly.
+            has_key = bool(self.ai_anthropic_key.text().strip() or self.cfg.resolved_anthropic_key())
+            probe = lambda: has_key  # noqa: E731
+        run_connection_test(self, self.ai_test_btn, self.ai_test_label, self.theme, probe)
 
     # ---------- Earshot Plus ----------
     def _plus_page(self) -> QWidget:

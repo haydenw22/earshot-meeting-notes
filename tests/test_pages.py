@@ -142,7 +142,12 @@ def main() -> int:
     # label reports "could not connect") rather than introspecting Qt's signal
     # internals, which is a stronger, more direct check of the click path
     ipage.todoist_token.setText("")
-    ipage._test_todoist()
+    ipage._test_todoist()  # runs off-thread now — wait for the probe worker
+    w = getattr(ipage, "_conn_test_worker", None)
+    if w is not None:
+        w.wait(4000)
+    app.processEvents()
+    check("test button disabled during the test then re-enabled", ipage.todoist_test_btn.isEnabled())
     check("test-connection updates the status label", "Could not connect" in ipage.todoist_test_label.text())
 
     print("== Integrations page: 'More coming soon' card lists Slack/Notion/Calendar ==")

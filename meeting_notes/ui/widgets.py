@@ -121,6 +121,38 @@ def calm_scroll_children(root) -> None:
             calm_scroll(w)
 
 
+def run_connection_test(owner, button, label, theme, probe) -> None:
+    """Run a network `probe() -> bool` OFF the GUI thread and reflect the result
+    in `label`. "Test connection" buttons previously called pings synchronously,
+    freezing the whole app for the timeout (up to ~16s against a dead server).
+
+    `probe` must capture its inputs up front (read the QLineEdits before calling
+    this). Guards against the widgets being deleted mid-flight (settings tab
+    rebuilds, wizard close): results are applied best-effort."""
+    from .workers import FuncWorker
+
+    button.setEnabled(False)
+    label.setStyleSheet("")
+    label.setText("Testing…")
+
+    worker = FuncWorker(lambda _progress: bool(probe()))
+
+    def apply(ok: bool) -> None:
+        try:
+            label.setText("✓ Connected" if ok else "✗ Could not connect")
+            label.setStyleSheet(
+                f"color:{theme.color('primary' if ok else 'danger')}; font-weight:600;"
+            )
+            button.setEnabled(True)
+        except RuntimeError:
+            pass  # the page/dialog was torn down while the probe ran
+
+    worker.done.connect(lambda ok: apply(bool(ok)))
+    worker.failed.connect(lambda _msg: apply(False))
+    owner._conn_test_worker = worker  # ref for tests / lifetime clarity
+    worker.start()
+
+
 def make_chip(text: str, *, fg: str, bg: str) -> QLabel:
     """A small rounded pill — used for status / meta tags."""
     lbl = QLabel(text)

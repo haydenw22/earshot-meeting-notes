@@ -29,7 +29,7 @@ from ..audio import devices as dev
 from ..capture import screen as screen_capture
 from ..transcription import whisper_client
 from .named_list import NamedListManager
-from .widgets import Card, calm_scroll_children
+from .widgets import Card, calm_scroll_children, run_connection_test
 
 # One-click fills for the OpenAI-compatible transcription provider.
 # (label, base_url, model) — prices as of mid-2026, shown for orientation.
@@ -259,24 +259,16 @@ class SettingsPage(QWidget):
         self.local_card.setVisible(provider == "local")
 
     def _test_llm(self) -> None:
-        self.llm_test_label.setText("Testing…")
-        self.llm_test_label.repaint()
         from ..notes import openai_llm
-        ok = openai_llm.ping(self.llm_base_url.text().strip(), self.llm_key.text().strip())
-        self.llm_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
-        self.llm_test_label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
+        base, key = self.llm_base_url.text().strip(), self.llm_key.text().strip()
+        run_connection_test(self, self.llm_test_btn, self.llm_test_label, self.theme,
+                            lambda: openai_llm.ping(base, key))
 
     def _test_local_llm(self) -> None:
-        self.local_test_label.setText("Testing…")
-        self.local_test_label.repaint()
         from ..notes import openai_llm
-        ok = openai_llm.ping(self.local_base_url.text().strip(), self.local_key.text().strip())
-        self.local_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
-        self.local_test_label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
+        base, key = self.local_base_url.text().strip(), self.local_key.text().strip()
+        run_connection_test(self, self.local_test_btn, self.local_test_label, self.theme,
+                            lambda: openai_llm.ping(base, key))
 
     def _reset_overlay_position(self) -> None:
         from ..config import OVERLAY_AUTO_POS
@@ -490,23 +482,22 @@ class SettingsPage(QWidget):
         self.deepgram_card.setVisible(provider == "deepgram")
 
     def _test(self) -> None:
-        self.test_label.setText("Testing…")
-        self.test_label.repaint()
+        # capture inputs on the GUI thread; the ping runs in a worker so a dead
+        # server can't freeze the app for the timeout
         provider = self._provider()
         if provider == "online":
             from ..transcription import openai_client
+            base = self.online_base_url.text().strip()
             key = self.online_key.text().strip() or os.environ.get("OPENAI_API_KEY", "")
-            ok = openai_client.ping(self.online_base_url.text().strip(), key)
+            probe = lambda: openai_client.ping(base, key)  # noqa: E731
         elif provider == "deepgram":
             from ..transcription import deepgram_client
             key = self.deepgram_key.text().strip() or os.environ.get("DEEPGRAM_API_KEY", "")
-            ok = deepgram_client.ping(key)
+            probe = lambda: deepgram_client.ping(key)  # noqa: E731
         else:
-            ok = whisper_client.ping(self.whisper_url.text().strip())
-        self.test_label.setText("✓ Connected" if ok else "✗ Could not connect")
-        self.test_label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
+            url = self.whisper_url.text().strip()
+            probe = lambda: whisper_client.ping(url)  # noqa: E731
+        run_connection_test(self, self.test_btn, self.test_label, self.theme, probe)
 
     # ---------- AI ----------
     def _ai_tab(self) -> QWidget:

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons
-from .widgets import Card, calm_scroll_children, make_chip
+from .widgets import Card, calm_scroll_children, make_chip, run_connection_test
 
 # Connectors previewed in the "More coming soon" card: (icon name, display name,
 # one-line description). Kept short and honest — nothing here is wired up yet.
@@ -147,14 +147,10 @@ class IntegrationsPage(QWidget):
         return card
 
     def _test_todoist(self) -> None:
-        self.todoist_test_label.setText("Testing…")
-        self.todoist_test_label.repaint()
         from ..integrations import todoist
-        ok = todoist.ping(self.todoist_token.text().strip())
-        self.todoist_test_label.setText("✓ Connected" if ok else "✗ Could not connect")
-        self.todoist_test_label.setStyleSheet(
-            f"color:{self.theme.color('primary' if ok else 'danger')}; font-weight:600;"
-        )
+        token = self.todoist_token.text().strip()
+        run_connection_test(self, self.todoist_test_btn, self.todoist_test_label, self.theme,
+                            lambda: todoist.ping(token))
 
     # ---------- more coming soon ----------
     def _coming_soon_card(self) -> Card:

@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.28.1] — 2026-07-07 · Test connection no longer freezes the app
+
+### Fixed
+
+- "Test connection" buttons (Transcription, AI, Integrations and the setup guide) ran on the UI thread and could freeze the whole app for up to ~16 seconds against an unreachable server. They now run in the background: the button shows "Testing…" and the app stays responsive.
+
 ## [0.28.0] — 2026-07-07 · Bug-hunt fixes across the app
 
 ### Fixed
