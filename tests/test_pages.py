@@ -114,17 +114,21 @@ def main() -> int:
     check("help page exists", hasattr(shell, "help"))
     check("collapse button exists", hasattr(shell, "collapse_btn"))
 
-    print("== shell: sidebar collapse round-trips and persists to cfg ==")
+    print("== shell: sidebar collapses to the icon rail and back, persisted to cfg ==")
     check("sidebar starts visible", not shell.sidebar.isHidden())
+    check("icon rail starts hidden", shell.rail.isHidden())
     shell.toggle_sidebar()
     app.processEvents()
     check("sidebar hidden after collapse", shell.sidebar.isHidden())
+    check("icon rail shown after collapse", not shell.rail.isHidden())
     check("cfg.sidebar_collapsed persisted", shell.cfg.sidebar_collapsed is True)
-    check("floating expand button shown", not shell.expand_btn.isHidden())
+    for name in ("rail_expand_btn", "rail_record_btn", "rail_home_btn", "rail_ask_btn",
+                 "rail_settings_btn", "rail_help_btn", "rail_account_btn"):
+        check(f"rail has {name}", hasattr(shell, name))
     shell.toggle_sidebar()
     app.processEvents()
     check("sidebar visible after expand", not shell.sidebar.isHidden())
-    check("expand button hidden again", shell.expand_btn.isHidden())
+    check("icon rail hidden again", shell.rail.isHidden())
 
     # ---------------------------------------------------------------
     print("== sidebar CTA reflects a live recording ==")

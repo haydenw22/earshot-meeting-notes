@@ -23,6 +23,7 @@ from .widgets import Card
 
 WEBSITE_URL = "https://tryearshot.app"
 ISSUES_URL = "https://github.com/haydenw22/earshot-meeting-notes/issues"
+CHANGELOG_URL = "https://github.com/haydenw22/earshot-meeting-notes/blob/main/CHANGELOG.md"
 
 # (title, [(step/bullet heading, body), ...]) rendered as numbered steps
 _GETTING_STARTED = [

@@ -4,6 +4,14 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.29.1] — 2026-07-07 · Icon rail, friendlier dates, snappier About
+
+### Changed
+
+- Collapsing the sidebar now leaves a slim icon rail (record, import, Overview, Ask, theme, Settings, Help, account) instead of hiding it completely.
+- Trial and renewal dates read like a human wrote them: "July 20" instead of "2026-07-20", in the sidebar card, on Plans & Billing and on the Account page.
+- Settings, then About now shows only the three most recent releases, which keeps the page quick. A "Full release history" button and the Help menu's "What's new" open the complete changelog on GitHub.
+
 ## [0.29.0] — 2026-07-07 · UI overhaul: unified Settings, Plans & Billing, Help Center
 
 ### Added

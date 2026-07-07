@@ -284,7 +284,9 @@ def main() -> int:
             w.wait(4000)
         app.processEvents()
         check("usage meter reflects fetched usage (1h of 40h ≈ 2%)", apage.usage_bar.value() == 2)
-        check("renewal date shown from period_end", "2026-08-06" in apage.renewal_lbl.text())
+        # period_end is shown as a friendly day ("August 6"), not raw ISO
+        check("renewal date shown friendly from period_end", "August 6" in apage.renewal_lbl.text())
+        check("raw ISO date no longer shown", "2026-08-06" not in apage.renewal_lbl.text())
     finally:
         _ec.get_me = orig_get_me
 

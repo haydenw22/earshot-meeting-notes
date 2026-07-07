@@ -32,3 +32,14 @@ def today_pair() -> tuple[str, str]:
     """(human, iso) for today."""
     d = _dt.date.today()
     return human_date(d), iso_date(d)
+
+
+def friendly_day(iso: str) -> str:
+    """'2026-07-20' (or an ISO timestamp) -> 'July 20'. Anything unparseable is
+    returned untouched — used for server-supplied dates like a trial's end."""
+    s = (iso or "").strip()
+    try:
+        d = _dt.date.fromisoformat(s[:10])
+    except ValueError:
+        return s
+    return f"{d.strftime('%B')} {d.day}"

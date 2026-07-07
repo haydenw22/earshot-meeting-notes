@@ -114,8 +114,10 @@ class PlansPage(QWidget):
             return ("You're on the Free plan",
                     "Self-hosted with your own keys, free forever. Earshot Plus adds managed "
                     "transcription and AI for $9 a month.")
+        from ..util.dates import friendly_day
+
         status = (self.cfg.extra.get("cloud_sub_status") or "").strip()
-        end = (self.cfg.extra.get("cloud_period_end") or "").strip()
+        end = friendly_day(self.cfg.extra.get("cloud_period_end") or "")
         if status in ("trialing", "beta"):
             when = f" It ends {end}." if end else ""
             return ("Your Earshot Plus trial is active",

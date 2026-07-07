@@ -170,21 +170,12 @@ class Shell(QMainWindow):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
 
-        self.sidebar = self._sidebar()
+        self.rail = self._icon_rail()  # icon-only sidebar shown while collapsed
+        self.sidebar = self._sidebar()  # (last: its icon refresh tints the rail too)
         self.stack = QStackedWidget()
         for page in (self.home, self.record, self.detail, self.settings, self.ask,
                      self.help, self.project):
             self.stack.addWidget(page)
-
-        # floating "expand" affordance shown only while the sidebar is collapsed
-        self.expand_btn = QToolButton(self.stack)
-        self.expand_btn.setObjectName("SidebarExpand")
-        self.expand_btn.setFixedSize(30, 30)
-        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.expand_btn.setToolTip("Show sidebar")
-        self.expand_btn.clicked.connect(self.toggle_sidebar)
-        self.expand_btn.hide()
-        self.stack.installEventFilter(self)
 
         # A splitter makes the sidebar drag-resizable; its order flips for L/R.
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -196,37 +187,40 @@ class Shell(QMainWindow):
         row.addWidget(self.splitter)
 
     def _arrange_splitter(self) -> None:
-        """(Re)order sidebar + content for the configured side and apply width."""
+        """(Re)order rail + sidebar + content for the configured side and apply
+        the width. Only one of {rail, sidebar} is visible at a time."""
         w = max(180, int(self.cfg.sidebar_width or 258))
         side = "right" if self.cfg.sidebar_side == "right" else "left"
+        self.rail.setParent(None)
         self.sidebar.setParent(None)
         self.stack.setParent(None)
         if side == "left":
+            self.splitter.addWidget(self.rail)
             self.splitter.addWidget(self.sidebar)
             self.splitter.addWidget(self.stack)
-            self._sidebar_index = 0
-            self.splitter.setStretchFactor(0, 0)
-            self.splitter.setStretchFactor(1, 1)
-            self.splitter.setSizes([w, max(480, self.width() - w)])
+            self._sidebar_index = 1
+            for i, stretch in ((0, 0), (1, 0), (2, 1)):
+                self.splitter.setStretchFactor(i, stretch)
+            self.splitter.setSizes([self._RAIL_W, w, max(480, self.width() - w)])
         else:
             self.splitter.addWidget(self.stack)
             self.splitter.addWidget(self.sidebar)
+            self.splitter.addWidget(self.rail)
             self._sidebar_index = 1
-            self.splitter.setStretchFactor(0, 1)
-            self.splitter.setStretchFactor(1, 0)
-            self.splitter.setSizes([max(480, self.width() - w), w])
-        # border on the inner edge of the sidebar
-        self.sidebar.setProperty("side", side)
-        self.sidebar.style().unpolish(self.sidebar)
-        self.sidebar.style().polish(self.sidebar)
-        # re-parenting into the splitter re-shows the sidebar — respect collapse
-        if getattr(self.cfg, "sidebar_collapsed", False) and hasattr(self, "expand_btn"):
-            self.sidebar.setVisible(False)
-            self._position_expand_btn()
+            for i, stretch in ((0, 1), (1, 0), (2, 0)):
+                self.splitter.setStretchFactor(i, stretch)
+            self.splitter.setSizes([max(480, self.width() - w), w, self._RAIL_W])
+        # border on the inner edge of the sidebar/rail
+        for bar in (self.sidebar, self.rail):
+            bar.setProperty("side", side)
+            bar.style().unpolish(bar)
+            bar.style().polish(bar)
+        # re-parenting into the splitter re-shows both — restore the exclusivity
+        self._apply_sidebar_collapsed()
 
     def _on_splitter_moved(self, *_) -> None:
         sizes = self.splitter.sizes()
-        if self._sidebar_index < len(sizes):
+        if self._sidebar_index < len(sizes) and not self.cfg.sidebar_collapsed:
             self.cfg.sidebar_width = max(180, sizes[self._sidebar_index])
             self.cfg.save()
 
@@ -467,19 +461,17 @@ class Shell(QMainWindow):
         self._active_project = ("folder", folder_id)
         self._set_active("project")
 
-    def _open_help_menu(self) -> None:
-        """The sidebar Help button: a small menu popping up above the button,
-        Wispr-style — the Help Center guide, release notes, and outside links."""
+    def _open_help_menu(self, anchor=None) -> None:
+        """The Help button (sidebar or collapsed rail): a small menu popping up
+        above the button, Wispr-style — the Help Center guide, the full release
+        history on GitHub, and outside links."""
         import webbrowser
 
-        from .page_help import ISSUES_URL, WEBSITE_URL
+        from .page_help import CHANGELOG_URL, ISSUES_URL, WEBSITE_URL
 
+        anchor = anchor if anchor is not None else self.help_btn
         menu = QMenu(self)
         c = self.theme.color("text_muted")
-        menu.addAction(icons.icon("book-open", c, 16), "Help Center", self.show_help)
-        menu.addAction(icons.icon("info", c, 16), "What's new",
-                       lambda: self.show_settings("about"))
-        menu.addSeparator()
 
         def _open(url: str) -> None:
             try:
@@ -487,11 +479,15 @@ class Shell(QMainWindow):
             except Exception:
                 pass
 
+        menu.addAction(icons.icon("book-open", c, 16), "Help Center", self.show_help)
+        menu.addAction(icons.icon("info", c, 16), "What's new",
+                       lambda: _open(CHANGELOG_URL))
+        menu.addSeparator()
         menu.addAction(icons.icon("external-link", c, 16), "Visit tryearshot.app",
                        lambda: _open(WEBSITE_URL))
         menu.addAction(icons.icon("alert-triangle", c, 16), "Report an issue",
                        lambda: _open(ISSUES_URL))
-        pos = self.help_btn.mapToGlobal(QPoint(0, 0))
+        pos = anchor.mapToGlobal(QPoint(0, 0))
         pos.setY(pos.y() - menu.sizeHint().height() - 6)
         menu.exec(pos)
 
@@ -503,39 +499,71 @@ class Shell(QMainWindow):
         self.refresh_account_card()
         self.refresh_plan_state()
 
-    # ---------- sidebar collapse ----------
+    # ---------- sidebar collapse (full sidebar <-> icon rail) ----------
+    _RAIL_W = 56
+
     def toggle_sidebar(self) -> None:
         self.cfg.sidebar_collapsed = not self.cfg.sidebar_collapsed
         self.cfg.save()
         self._apply_sidebar_collapsed()
+        if not self.cfg.sidebar_collapsed:
+            self._arrange_splitter()  # restore the saved sidebar width
 
     def _apply_sidebar_collapsed(self) -> None:
         collapsed = bool(self.cfg.sidebar_collapsed)
         self.sidebar.setVisible(not collapsed)
-        self.expand_btn.setVisible(collapsed)
-        if collapsed:
-            self._position_expand_btn()
-        else:
-            self._arrange_splitter()
+        self.rail.setVisible(collapsed)
 
-    def _position_expand_btn(self) -> None:
-        """Keep the floating expand button pinned to the content's top corner on
-        the side the sidebar lives on."""
-        m = 10
-        if self.cfg.sidebar_side == "right":
-            x = max(m, self.stack.width() - self.expand_btn.width() - m)
-        else:
-            x = m
-        self.expand_btn.move(x, m)
-        self.expand_btn.raise_()
+    def _icon_rail(self) -> QFrame:
+        """The collapsed sidebar: a slim icon-only rail (Wispr-style) with the
+        essentials — expand, record, import, nav, theme, settings, help,
+        account. Same #Sidebar chrome so it reads as the same surface."""
+        rail = QFrame()
+        rail.setObjectName("Sidebar")
+        rail.setFixedWidth(self._RAIL_W)
+        lay = QVBoxLayout(rail)
+        lay.setContentsMargins(8, 12, 8, 12)
+        lay.setSpacing(6)
+
+        def btn(tooltip: str, slot, *, name: str = "") -> QToolButton:
+            b = QToolButton()
+            if name:
+                b.setObjectName(name)
+            b.setFixedSize(40, 40)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(tooltip)
+            b.clicked.connect(slot)
+            lay.addWidget(b, 0, Qt.AlignmentFlag.AlignHCenter)
+            return b
+
+        self.rail_expand_btn = btn("Show sidebar", self.toggle_sidebar)
+
+        self.rail_logo = QLabel()
+        self.rail_logo.setFixedSize(30, 30)
+        self.rail_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.rail_logo, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addSpacing(4)
+
+        self.rail_record_btn = btn("New recording", self.show_record, name="RailRecord")
+        self.rail_import_btn = btn("Import file", self._import_file)
+        self.rail_home_btn = btn("Overview", self.show_home)
+        self.rail_ask_btn = btn("Ask Earshot", self.show_ask)
+        lay.addStretch(1)
+        self.rail_theme_btn = btn("Switch light/dark theme", self._toggle_theme)
+        self.rail_settings_btn = btn("Settings", self.show_settings)
+        self.rail_help_btn = btn("Help", lambda: self._open_help_menu(self.rail_help_btn))
+        self.rail_account_btn = btn("Account", self.show_account)
+        return rail
 
     # ---------- plan chip + status card ----------
     def refresh_plan_state(self) -> None:
         """Render the logo plan chip and the sidebar status card from the cached
         /v1/me snapshot (cfg.extra) — no network calls here."""
+        from ..util.dates import friendly_day
+
         cloud = self.cfg.account_mode == "cloud"
         status = (self.cfg.extra.get("cloud_sub_status") or "").strip()
-        end = (self.cfg.extra.get("cloud_period_end") or "").strip()
+        end = friendly_day(self.cfg.extra.get("cloud_period_end") or "")
 
         if cloud:
             trialing = status in ("trialing", "beta")
@@ -801,17 +829,6 @@ class Shell(QMainWindow):
         self.projects_host.setVisible(not bool(self.cfg.folders_collapsed))
         self._set_folders_chevron_icon()
 
-    def eventFilter(self, obj, event):
-        # keep the floating expand button pinned while the sidebar is collapsed
-        if (
-            obj is getattr(self, "stack", None)
-            and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)
-            and getattr(self, "expand_btn", None) is not None
-            and self.expand_btn.isVisible()
-        ):
-            self._position_expand_btn()
-        return super().eventFilter(obj, event)
-
     def _toggle_folders_collapsed(self) -> None:
         self.cfg.folders_collapsed = not self.cfg.folders_collapsed
         self.cfg.save()
@@ -924,20 +941,25 @@ class Shell(QMainWindow):
 
     def set_recording(self, active: bool) -> None:
         """Reflect a live recording in the sidebar CTA: the label flips to
-        'Recording' and the record dot pulses until the recording stops."""
+        'Recording' and the record dot pulses until the recording stops (the
+        collapsed rail's record button pulses along)."""
         if active:
             self.new_btn.setText("  Recording")
+            self.rail_record_btn.setToolTip("Recording")
             self._pulse_on = True
             self._rec_pulse.start()
         else:
             self._rec_pulse.stop()
             self.new_btn.setText("  New recording")
             self.new_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 16))
+            self.rail_record_btn.setToolTip("New recording")
+            self.rail_record_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 18))
 
     def _pulse_record_icon(self) -> None:
         self._pulse_on = not self._pulse_on
         color = self.theme.color("on_danger") if self._pulse_on else self.theme.color("danger_press")
         self.new_btn.setIcon(icons.icon("record", color, 16))
+        self.rail_record_btn.setIcon(icons.icon("record", color, 18))
 
     def _refresh_sidebar_icons(self) -> None:
         # brand mark (the indigo tile is part of the SVG, so no QSS background)
@@ -952,10 +974,22 @@ class Shell(QMainWindow):
         self.help_btn.setIcon(icons.icon("help-circle", self.theme.color("text_muted"), 18))
         self.collapse_btn.setIcon(icons.icon("panel-left", self.theme.color("text_muted"), 17))
         # the theme button previews the mode you'd switch TO
-        self.theme_btn.setIcon(icons.icon(
-            "sun" if self.theme.mode == "dark" else "moon", self.theme.color("text_muted"), 17))
-        if hasattr(self, "expand_btn"):
-            self.expand_btn.setIcon(icons.icon("panel-left", self.theme.color("text_muted"), 16))
+        next_theme = "sun" if self.theme.mode == "dark" else "moon"
+        self.theme_btn.setIcon(icons.icon(next_theme, self.theme.color("text_muted"), 17))
+        # the collapsed icon rail mirrors the sidebar's affordances
+        if hasattr(self, "rail_expand_btn"):
+            muted = self.theme.color("text_muted")
+            self.rail_expand_btn.setIcon(icons.icon("panel-left", muted, 17))
+            self.rail_logo.setPixmap(logo.logo_pixmap(30))
+            if not self._rec_pulse.isActive():
+                self.rail_record_btn.setIcon(icons.icon("record", self.theme.color("on_danger"), 18))
+            self.rail_import_btn.setIcon(icons.icon("upload", muted, 17))
+            self.rail_home_btn.setIcon(icons.icon("home", muted, 18))
+            self.rail_ask_btn.setIcon(icons.icon("message", muted, 18))
+            self.rail_theme_btn.setIcon(icons.icon(next_theme, muted, 17))
+            self.rail_settings_btn.setIcon(icons.icon("settings", muted, 18))
+            self.rail_help_btn.setIcon(icons.icon("help-circle", muted, 18))
+            self.rail_account_btn.setIcon(icons.icon("user", muted, 18))
         self.new_folder_btn.setIcon(icons.icon("plus", self.theme.color("text_muted"), 14))
         self._set_folders_chevron_icon()
         if hasattr(self, "account_card"):

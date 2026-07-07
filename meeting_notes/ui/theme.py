@@ -321,14 +321,13 @@ QTabBar::tab:disabled {{ color: {t['text_faint']}; }}
 #PlanPrice {{ font-family: {FONT_DISPLAY}; font-size: 22px; font-weight: 700; color: {t['text']}; }}
 #PlanKicker {{ color: {t['text_faint']}; font-size: 12px; font-weight: 600; }}
 
-/* floating expand button shown when the sidebar is collapsed */
-QToolButton#SidebarExpand {{
-    background-color: {t['surface']};
-    border: 1px solid {t['border']};
-    border-radius: 10px;
-    padding: 5px;
+/* collapsed icon rail: the record button keeps its danger colour */
+QToolButton#RailRecord {{
+    background-color: {t['danger']};
+    border-radius: 12px;
 }}
-QToolButton#SidebarExpand:hover {{ background-color: {t['surface_hover']}; }}
+QToolButton#RailRecord:hover {{ background-color: {t['danger_hover']}; }}
+QToolButton#RailRecord:pressed {{ background-color: {t['danger_press']}; }}
 
 /* ---------- text views ---------- */
 QTextBrowser, QTextEdit {{

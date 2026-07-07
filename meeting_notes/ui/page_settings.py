@@ -816,9 +816,11 @@ class SettingsPage(QWidget):
         cl.addWidget(body)
         lay.addWidget(card)
 
-        # What's new — the release history (single source of truth: meeting_notes.changelog)
-        wn_card, wncl = self._card("What's new", "Recent updates to Earshot.")
-        for rel in changelog.RELEASES:
+        # What's new — the LAST THREE releases only (the full history built
+        # hundreds of QLabels and made the pane laggy); the complete changelog
+        # lives on GitHub, one click away.
+        wn_card, wncl = self._card("What's new", "The three most recent updates.")
+        for rel in changelog.RELEASES[:3]:
             head = QLabel(f"Version {rel.version}  ·  {rel.date}" + (f"  ·  {rel.title}" if rel.title else ""))
             head.setObjectName("H3")
             head.setContentsMargins(0, 10, 0, 2)
@@ -831,10 +833,24 @@ class SettingsPage(QWidget):
                     wncl.addWidget(sh)
                 for b in bullets:
                     wncl.addWidget(self._changelog_bullet(b))
+        self.full_history_btn = QPushButton("  Full release history")
+        self.full_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.full_history_btn.clicked.connect(self._open_full_changelog)
+        wncl.addSpacing(6)
+        wncl.addWidget(self.full_history_btn, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addWidget(wn_card)
 
         lay.addStretch(1)
         return w
+
+    def _open_full_changelog(self) -> None:
+        import webbrowser
+
+        from .page_help import CHANGELOG_URL
+        try:
+            webbrowser.open(CHANGELOG_URL)
+        except Exception:
+            pass
 
     def _changelog_bullet(self, text: str) -> QWidget:
         row = QWidget()
@@ -923,6 +939,8 @@ class SettingsPage(QWidget):
         # the Transcription pane (and its Test button) is absent in cloud mode
         if hasattr(self, "test_btn"):
             self.test_btn.setIcon(self.theme.icon("globe", "text_muted", 16))
+        if hasattr(self, "full_history_btn"):
+            self.full_history_btn.setIcon(self.theme.icon("external-link", "text_muted", 15))
         self._retint_nav()
         self._sync_theme_buttons()
         self._sync_side_buttons()

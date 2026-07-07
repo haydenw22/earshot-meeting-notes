@@ -302,21 +302,24 @@ class AccountPage(QWidget):
         if not isinstance(data, dict):
             self._on_me_failed("offline")
             return
+        from ..util.dates import friendly_day
+
         sub_status = data.get("sub_status") or ""
         self._set_status_chip(sub_status)
         period_end = data.get("period_end") or ""
+        when = friendly_day(period_end)  # "2026-07-20" -> "July 20"
         # copy matches the subscription state: a trial ENDS, a cancelled sub RUNS
         # OUT, an active sub RENEWS — and the button says what to do about it
         if sub_status in ("trialing", "beta"):
-            self.renewal_lbl.setText(f"Trial ends {period_end}" if period_end else "Trial active")
+            self.renewal_lbl.setText(f"Trial ends {when}" if when else "Trial active")
             self.billing_btn.setText("Upgrade now")
         elif sub_status in ("canceled", "past_due"):
             self.renewal_lbl.setText(
-                f"Plus stays active until {period_end}" if period_end else "Auto-renewal is off"
+                f"Plus stays active until {when}" if when else "Auto-renewal is off"
             )
             self.billing_btn.setText("Renew subscription")
-        elif period_end:
-            self.renewal_lbl.setText(f"Renews {period_end}")
+        elif when:
+            self.renewal_lbl.setText(f"Renews {when}")
         else:
             self.renewal_lbl.setText("")
         billing_url = data.get("billing_url")
