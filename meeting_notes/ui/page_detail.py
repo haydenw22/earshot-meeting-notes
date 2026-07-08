@@ -163,7 +163,7 @@ class DetailPage(QWidget):
 
         btns = QHBoxLayout()
         btns.setSpacing(10)
-        self.copy_btn = self._action("Copy notes", self._copy_summary)
+        self.copy_btn = self._action("Copy", None)
         self.copy_btn.setProperty("variant", "primary")
         self.share_btn = self._action("Share…", self._share_html)
         self.todoist_btn = self._action("To Todoist", self._send_todoist)
@@ -183,6 +183,12 @@ class DetailPage(QWidget):
         self.act_folder = self.more_menu.addAction("Open audio folder", self._open_folder)
         self.move_menu = self.more_menu.addMenu("Move to project")
         self.more_btn.setMenu(self.more_menu)
+
+        self.copy_menu = QMenu(self.copy_btn)
+        self.act_copy_all = self.copy_menu.addAction("Copy all", self._copy_all)
+        self.act_copy_actions = self.copy_menu.addAction("Copy action items", self._copy_actions_todo)
+        self.act_copy_summary = self.copy_menu.addAction("Copy summary", self._copy_summary_only)
+        self.copy_btn.setMenu(self.copy_menu)
 
     def _action(self, text: str, slot) -> QPushButton:
         b = QPushButton(text)
@@ -1007,21 +1013,68 @@ class DetailPage(QWidget):
         self.status_label.setText(f"Saved {Path(path).name} — opening preview…")
         os.startfile(path)  # noqa: S606
 
-    def _copy_summary(self) -> None:
-        """Put the notes on the clipboard as rich HTML + clean plain text so they
-        paste cleanly into Notion / email / anywhere (no markdown symbols)."""
+    # ---------- the Copy menu (all / action items / summary) ----------
+    def _meeting_with_notes(self):
         if self.meeting_id is None:
-            return
+            return None
         m = self.repo.get(self.meeting_id)
-        if not m.notes:
-            return
+        return m if m.notes else None
+
+    def _set_clipboard(self, *, text: str, html: str | None = None, message: str = "") -> None:
         from PySide6.QtCore import QMimeData
         from PySide6.QtWidgets import QApplication
 
+        mime = QMimeData()
+        mime.setText(text)
+        if html is not None:
+            mime.setHtml(html)
+        QApplication.clipboard().setMimeData(mime)
+        if message:
+            self.status_label.setText(message)
+
+    def _copy_all(self) -> None:
+        """Everything as it looks in Earshot: agenda, summary, action items and
+        sections — rich HTML + clean plain text (no markdown symbols)."""
+        m = self._meeting_with_notes()
+        if m is None:
+            return
         from ..notes import render
 
-        mime = QMimeData()
-        mime.setHtml(render.to_html(m.notes, date_text=m.date_text, attendees=m.attendees))
-        mime.setText(render.to_plaintext(m.notes, date_text=m.date_text, attendees=m.attendees))
-        QApplication.clipboard().setMimeData(mime)
-        self.status_label.setText("Summary copied — paste into Notion, email, anywhere.")
+        agenda = (m.agenda or "").strip()
+        self._set_clipboard(
+            html=render.to_html(m.notes, date_text=m.date_text, attendees=m.attendees, agenda=agenda),
+            text=render.to_plaintext(m.notes, date_text=m.date_text, attendees=m.attendees, agenda=agenda),
+            message="Notes copied. Paste into Notion, email, anywhere.",
+        )
+
+    def _copy_actions_todo(self) -> None:
+        """Action items as plain-text markdown to-dos. Plain text ONLY: with an
+        HTML flavour present, Notion would use it instead of converting the
+        '- [ ]' markdown into real checkbox blocks."""
+        m = self._meeting_with_notes()
+        if m is None:
+            return
+        from ..notes import render
+
+        md = render.todo_markdown(m.notes)
+        if not md:
+            self.status_label.setText("No action items to copy.")
+            return
+        self._set_clipboard(text=md,
+                            message="Action items copied. Paste into Notion for a to-do list.")
+
+    def _copy_summary_only(self) -> None:
+        """Agenda + summary + topic sections, without the action items."""
+        m = self._meeting_with_notes()
+        if m is None:
+            return
+        from ..notes import render
+
+        agenda = (m.agenda or "").strip()
+        self._set_clipboard(
+            html=render.to_html(m.notes, date_text=m.date_text, attendees=m.attendees,
+                                agenda=agenda, include_actions=False),
+            text=render.to_plaintext(m.notes, date_text=m.date_text, attendees=m.attendees,
+                                     agenda=agenda, include_actions=False),
+            message="Summary copied. Paste into Notion, email, anywhere.",
+        )

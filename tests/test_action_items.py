@@ -111,9 +111,53 @@ def main() -> int:
     mm = repo.get(m.id)
     check("share-HTML marks suggestions", share.to_share_html(mm).count("(suggested)") == 1)
 
-    print("== detail page: keep / edit / dismiss ==")
+    print("== render: Notion to-do markdown + summary-only + agenda ==")
+    md = render.todo_markdown(NOTES)
+    md_lines = md.splitlines()
+    check("one markdown line per action item", len(md_lines) == len(NOTES["action_items"]))
+    check("open items render as '- [ ]'", md_lines[0].startswith("- [ ] "))
+    check("done items render as '- [x]'",
+          any(ln.startswith("- [x] ") and "Suggested but done" in ln for ln in md_lines))
+    check("owner rides along in parentheses", "(Sam)" in md_lines[0])
+    check("suggestions marked in the to-do list", sum("suggested" in ln for ln in md_lines) >= 1)
+    check("no em dashes in the to-do markdown", "—" not in md)
+
+    s_html = render.to_html(NOTES, agenda="Talk pricing", include_actions=False)
+    s_txt = render.to_plaintext(NOTES, agenda="Talk pricing", include_actions=False)
+    check("summary-only HTML has no action items", "Action items" not in s_html and "Accepted open" not in s_html)
+    check("summary-only plaintext has no action items", "Accepted open" not in s_txt)
+    check("agenda included in summary HTML", "Agenda" in s_html and "Talk pricing" in s_html)
+    check("agenda included in summary plaintext", "Talk pricing" in s_txt)
+    check("full copy still includes actions AND agenda",
+          "Accepted open" in render.to_plaintext(NOTES, agenda="Talk pricing"))
+
+    print("== detail page: Copy menu (all / action items / summary) ==")
     page = DetailPage(shell, repo, Config(), theme)
     page.load(m.id)
+    check("copy button reads 'Copy'", page.copy_btn.text() == "Copy")
+    copy_texts = [a.text() for a in page.copy_menu.actions()]
+    check("copy menu offers all/action items/summary",
+          copy_texts == ["Copy all", "Copy action items", "Copy summary"])
+    from PySide6.QtWidgets import QApplication as _QApp
+    page._copy_actions_todo()
+    cb = _QApp.clipboard().mimeData()
+    check("copy action items puts markdown to-dos on the clipboard",
+          cb.text().startswith("- [") and "- [ ] Accepted open (Sam)" in cb.text())
+    check("copy action items is PLAIN TEXT only (Notion needs it to parse '- [ ]')",
+          not cb.hasHtml())
+    page._copy_summary_only()
+    cb = _QApp.clipboard().mimeData()
+    check("copy summary has rich HTML flavour", cb.hasHtml())
+    check("copy summary excludes action items", "Accepted open" not in cb.text())
+    page._copy_all()
+    cb = _QApp.clipboard().mimeData()
+    check("copy all includes action items", "Accepted open" in cb.text())
+    # leave the clipboard empty: offscreen Qt segfaults at interpreter exit
+    # tearing down a clipboard that still owns our QMimeData
+    _QApp.clipboard().clear()
+    app.processEvents()
+
+    print("== detail page: keep / edit / dismiss ==")
 
     page._confirm_action(1)  # keep "Suggested open"
     items = repo.get(m.id).notes["action_items"]

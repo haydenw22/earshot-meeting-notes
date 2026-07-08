@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] — 2026-07-07 · Copy menu: all, action items, or summary
+
+### Added
+
+- The Copy button on a meeting now offers three choices. "Copy all" copies the notes exactly as they look in Earshot (agenda, summary, action items and sections). "Copy action items" copies a Notion-ready to-do list: paste it into Notion and every item becomes a real checkbox, ticked to match Earshot. "Copy summary" copies the agenda and summary sections without the action items.
+
 ## [0.29.3] — 2026-07-07 · Ask Earshot search picker shows projects
 
 ### Fixed
