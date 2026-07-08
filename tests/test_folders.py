@@ -271,7 +271,61 @@ def main() -> int:
     header_texts = {combo.itemText(i) for i in headers}
     check("group headers present and non-selectable",
           "Projects" in header_texts and "A single meeting" in header_texts)
+
+    # ---------------------------------------------------------------
+    print("== ask page: answers are selectable and copyable ==")
+    from PySide6.QtWidgets import QLabel as _QLabel, QPushButton as _QBtn
+    from PySide6.QtWidgets import QApplication as _QApp
+    from meeting_notes.qa.ask import Answer
+    ask_page._render_answer(Answer("Here is the drafted email you asked for.",
+                                    citations=[], scope="Searched 1 of 1 meeting(s)"))
+    holder = ask_page.chat_lay.itemAt(ask_page.chat_lay.count() - 2).widget()
+    body = next(l for l in holder.findChildren(_QLabel)
+                if "drafted email" in l.text())
+    check("answer text is selectable by mouse",
+          bool(body.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse))
+    copy_btn = next(b for b in holder.findChildren(_QBtn) if b.text() == "Copy")
+    copy_btn.click()
+    check("copy button copies the answer to the clipboard",
+          _QApp.clipboard().text() == "Here is the drafted email you asked for.")
+    _QApp.clipboard().clear()
+
+    print("== ask page: chat history persists, lists, loads ==")
+    check("history button exists", hasattr(ask_page, "history_btn"))
+    check("derive title strips filler",
+          AskPage._derive_title("Can you please draft both emails I need to send to Tim")
+          == "Draft both emails I need to send to Tim")
+    # simulate a conversation being recorded (bypassing the network worker)
+    ask_page._new_chat()
+    ask_page._record("you", "Can you please draft both emails to Tim")
+    ask_page._record("answer", "Email 1: ...\nEmail 2: ...", citations=[], scope="")
+    check("a chat was saved with a derived title", ask_page._chat_id is not None)
+    chats = ask_repo.list_chats()
+    check("saved chat appears in history", len(chats) == 1
+          and chats[0].title == "Draft both emails to Tim")
+    saved_id = ask_page._chat_id
+    # start a fresh chat, then reload the saved one from history
+    ask_page._new_chat()
+    check("new chat clears the current id", ask_page._chat_id is None)
+    ask_page._load_chat(saved_id)
+    check("loading restores the chat id + messages",
+          ask_page._chat_id == saved_id and len(ask_page._messages) == 2)
+    check("loaded conversation rebuilt its bubbles",
+          any("Email 1" in l.text() for l in ask_page.findChildren(_QLabel)))
+    # the history menu lists it
+    ask_page._open_history()
+    menu_texts = [a.text() for a in ask_page._history_menu.actions()]
+    check("history menu lists the saved chat",
+          any("Draft both emails to Tim" in t for t in menu_texts))
+    ask_page._history_menu.close()
     ask_repo.close()
+
+    print("== ask prompt permits drafting (no over-refusal) ==")
+    from meeting_notes.qa import ask as _ask
+    sys_l = _ask.ANSWER_SYSTEM.lower()
+    check("answer prompt allows drafting emails", "draft" in sys_l and "email" in sys_l)
+    check("answer prompt tells it not to refuse assigned tasks",
+          "do not refuse" in sys_l and "authority" in sys_l)
 
     # ---------------------------------------------------------------
     print("== detail page: move_menu lists 'Uncategorized' + folders; triggering moves the meeting ==")

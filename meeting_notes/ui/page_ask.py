@@ -1,16 +1,22 @@
 """The "Ask" page — a chat over your past meetings.
 
 Type a natural-language question; the answer comes back with clickable citation
-chips that jump to the source meeting. Runs off-thread via FuncWorker.
+chips that jump to the source meeting. Runs off-thread via FuncWorker. Answer
+text is selectable and copyable, and each conversation is saved to history
+(auto-named from the first question) so it can be revisited.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+import re
+
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -18,12 +24,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..qa.ask import Answer
 from ..util.dates import iso_date
 from . import icons
 from .widgets import Card
 from .workers import FuncWorker
 
 _RECENT_MEETINGS_LIMIT = 15
+_HISTORY_LIMIT = 50
 
 
 class AskPage(QWidget):
@@ -35,6 +43,11 @@ class AskPage(QWidget):
         self.theme = theme
         self.worker: FuncWorker | None = None
         self._empty: QWidget | None = None
+        # current conversation (persisted to repo.ask_chats)
+        self._chat_id: int | None = None
+        self._chat_title: str | None = None
+        self._messages: list[dict] = []
+        self._history_menu: QMenu | None = None
         self._build()
 
     def _build(self) -> None:
@@ -53,6 +66,10 @@ class AskPage(QWidget):
         titles.addWidget(sub)
         header.addLayout(titles)
         header.addStretch(1)
+        self.history_btn = QPushButton("History")
+        self.history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.history_btn.clicked.connect(self._open_history)
+        header.addWidget(self.history_btn, alignment=Qt.AlignmentFlag.AlignTop)
         self.new_chat_btn = QPushButton("New chat")
         self.new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_chat_btn.clicked.connect(self._new_chat)
@@ -108,7 +125,7 @@ class AskPage(QWidget):
         t.setObjectName("H3")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ex = QLabel('Try: "What were the action items from my budget meeting?"  ·  '
-                    '"Did Sam agree to the Friday deadline?"')
+                    '"Draft the follow-up email I need to send."')
         ex.setObjectName("Faint")
         ex.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ex.setWordWrap(True)
@@ -187,6 +204,87 @@ class AskPage(QWidget):
                 return [m for m in meetings if m.id == value]
         return list(meetings)
 
+    # ---------- chat persistence + history ----------
+    @staticmethod
+    def _derive_title(question: str) -> str:
+        """A short reference name from the first question. Drops leading filler
+        ('can you please…') and trims to a handful of words."""
+        q = (question or "").strip()
+        q = re.sub(r"^(can|could|would|will)\s+you\s+(please\s+)?", "", q, flags=re.IGNORECASE)
+        q = re.sub(r"^(please|hey|ok|okay|so|um)\b[\s,]*", "", q, flags=re.IGNORECASE)
+        q = q.strip().strip("?.! ")
+        if q:
+            q = q[0].upper() + q[1:]
+        words = q.split()
+        if len(words) > 10:
+            q = " ".join(words[:10]) + "…"
+        if len(q) > 60:
+            q = q[:59].rstrip() + "…"
+        return q or "New chat"
+
+    def _record(self, role: str, text: str, citations=None, scope: str = "") -> None:
+        self._messages.append({
+            "role": role, "text": text,
+            "citations": citations or [], "scope": scope,
+        })
+        if role == "you" and self._chat_title is None:
+            self._chat_title = self._derive_title(text)
+        self._persist()
+
+    def _persist(self) -> None:
+        # never let history bookkeeping break the actual chat
+        title = self._chat_title or "New chat"
+        try:
+            if self._chat_id is None:
+                self._chat_id = self.repo.create_chat(title, self._messages)
+            else:
+                self.repo.update_chat(self._chat_id, title=title, messages=self._messages)
+        except Exception:
+            pass
+
+    def _open_history(self) -> None:
+        menu = QMenu(self)
+        try:
+            chats = self.repo.list_chats(limit=_HISTORY_LIMIT)
+        except Exception:
+            chats = []
+        if not chats:
+            act = menu.addAction("No saved chats yet")
+            act.setEnabled(False)
+        else:
+            for c in chats:
+                label = c.title or "Untitled chat"
+                if c.id == self._chat_id:
+                    label = "•  " + label  # mark the one you're viewing
+                act = menu.addAction(label)
+                act.triggered.connect(lambda _=False, cid=c.id: self._load_chat(cid))
+        self._history_menu = menu
+        menu.popup(self.history_btn.mapToGlobal(QPoint(0, self.history_btn.height() + 4)))
+
+    def _load_chat(self, chat_id: int) -> None:
+        try:
+            chat = self.repo.get_chat(chat_id)
+        except Exception:
+            chat = None
+        if chat is None:
+            return
+        self._clear_ui()
+        self._chat_id = chat.id
+        self._chat_title = chat.title
+        self._messages = [dict(m) for m in (chat.messages or [])]
+        for msg in self._messages:
+            role = msg.get("role") or "you"
+            if role == "answer":
+                self._render_answer(Answer(text=msg.get("text", ""),
+                                           citations=list(msg.get("citations") or []),
+                                           scope=msg.get("scope", "")))
+            else:
+                self._render_bubble(msg.get("text", ""), role=role)
+        if not self._messages:
+            self._empty = self._empty_state()
+            self.chat_lay.insertWidget(0, self._empty)
+        self.input.setFocus()
+
     # ---------- send / receive ----------
     def _send(self) -> None:
         q = self.input.text().strip()
@@ -201,8 +299,9 @@ class AskPage(QWidget):
             self._empty.deleteLater()
             self._empty = None
         self.input.clear()
-        self._add_bubble(q, role="you")
-        thinking = self._add_bubble("Thinking…", role="thinking")
+        self._render_bubble(q, role="you")
+        self._record("you", q)
+        thinking = self._render_bubble("Thinking…", role="thinking")
         self._set_busy(True)
 
         repo, cfg, today = self.repo, self.cfg, iso_date()
@@ -221,13 +320,16 @@ class AskPage(QWidget):
     def _on_answer(self, ans, thinking: QWidget) -> None:
         thinking.setParent(None)
         thinking.deleteLater()
-        self._add_answer(ans)
+        self._render_answer(ans)
+        self._record("answer", ans.text, citations=list(ans.citations or []), scope=ans.scope)
         self._set_busy(False)
 
     def _on_failed(self, msg: str, thinking: QWidget) -> None:
         thinking.setParent(None)
         thinking.deleteLater()
-        self._add_bubble(f"Sorry — {msg}", role="error")
+        text = f"Sorry — {msg}"
+        self._render_bubble(text, role="error")
+        self._record("error", text)
         self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
@@ -235,8 +337,9 @@ class AskPage(QWidget):
         self.send_btn.setText("…" if busy else "Ask")
         self.input.setEnabled(not busy)
         self.new_chat_btn.setEnabled(not busy)
+        self.history_btn.setEnabled(not busy)
 
-    def _new_chat(self) -> None:
+    def _clear_ui(self) -> None:
         i = 0
         while i < self.chat_lay.count():
             w = self.chat_lay.itemAt(i).widget()
@@ -246,19 +349,33 @@ class AskPage(QWidget):
                 w.deleteLater()
             else:
                 i += 1  # keep the trailing stretch
+        self._empty = None
+
+    def _new_chat(self) -> None:
+        self._clear_ui()
+        self._chat_id = None
+        self._chat_title = None
+        self._messages = []
         self._empty = self._empty_state()
         self.chat_lay.insertWidget(0, self._empty)
         self.input.clear()
         self.input.setFocus()
 
     # ---------- bubbles ----------
-    def _add_bubble(self, text: str, *, role: str) -> QWidget:
+    def _selectable(self, lbl: QLabel) -> None:
+        lbl.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        lbl.setCursor(Qt.CursorShape.IBeamCursor)
+
+    def _render_bubble(self, text: str, *, role: str) -> QWidget:
         card = Card(shadow=(role != "you"))
         lay = QVBoxLayout(card)
         lay.setContentsMargins(16, 12, 16, 12)
         lbl = QLabel(text)
         lbl.setWordWrap(True)
         lbl.setTextFormat(Qt.TextFormat.PlainText)  # never render AI/user text as rich text
+        self._selectable(lbl)
         if role == "thinking" or role == "error":
             lbl.setObjectName("Muted")
         lay.addWidget(lbl)
@@ -279,7 +396,7 @@ class AskPage(QWidget):
         self._scroll_to_bottom()
         return holder
 
-    def _add_answer(self, ans) -> None:
+    def _render_answer(self, ans) -> None:
         card = Card()
         lay = QVBoxLayout(card)
         lay.setContentsMargins(16, 14, 16, 14)
@@ -287,18 +404,19 @@ class AskPage(QWidget):
         body = QLabel(ans.text)
         body.setWordWrap(True)
         body.setTextFormat(Qt.TextFormat.PlainText)  # AI answer is untrusted → no rich text
+        self._selectable(body)
         lay.addWidget(body)
         if ans.citations:
             chips = QHBoxLayout()
             chips.setSpacing(6)
             seen = set()
             for c in ans.citations:
-                key = (c["meeting_id"], c.get("timestamp"))
+                key = (c.get("meeting_id"), c.get("timestamp"))
                 if key in seen:
                     continue
                 seen.add(key)
                 ts = f" · {c['timestamp']}" if c.get("timestamp") else ""
-                btn = QPushButton(f"{c['title']} ({c['date_text']}){ts}")
+                btn = QPushButton(f"{c.get('title', 'Meeting')} ({c.get('date_text', '')}){ts}")
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.setToolTip(c.get("quote", ""))
                 btn.setStyleSheet(
@@ -306,15 +424,29 @@ class AskPage(QWidget):
                     f"border:none; border-radius:9px; padding:4px 10px; font-size:12px; font-weight:600;}}"
                     f"QPushButton:hover{{background:{self.theme.color('primary_soft')};}}"
                 )
-                btn.clicked.connect(lambda _=False, mid=c["meeting_id"]: self.shell.open_meeting(mid))
+                btn.clicked.connect(lambda _=False, mid=c.get("meeting_id"): self._open_citation(mid))
                 chips.addWidget(btn)
             chips.addStretch(1)
             lay.addLayout(chips)
+
+        footer = QHBoxLayout()
+        copy_btn = QPushButton("Copy")
+        copy_btn.setProperty("variant", "ghost")
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setStyleSheet(
+            f"QPushButton{{color:{self.theme.color('text_muted')}; padding:2px 8px; font-size:12px;"
+            f"border:none; background:transparent;}}"
+            f"QPushButton:hover{{color:{self.theme.color('primary')};}}"
+        )
+        copy_btn.clicked.connect(lambda _=False, t=ans.text: self._copy_text(t))
+        footer.addWidget(copy_btn)
+        footer.addStretch(1)
         if ans.scope:
             sc = QLabel(ans.scope)
             sc.setObjectName("Faint")
             sc.setWordWrap(True)
-            lay.addWidget(sc)
+            footer.addWidget(sc, 1)
+        lay.addLayout(footer)
 
         wrap = QHBoxLayout()
         wrap.addWidget(card, 5)
@@ -323,6 +455,13 @@ class AskPage(QWidget):
         holder.setLayout(wrap)
         self.chat_lay.insertWidget(self.chat_lay.count() - 1, holder)
         self._scroll_to_bottom()
+
+    def _copy_text(self, text: str) -> None:
+        QApplication.clipboard().setText(text or "")
+
+    def _open_citation(self, mid) -> None:
+        if mid is not None:
+            self.shell.open_meeting(mid)
 
     def _scroll_to_bottom(self) -> None:
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(

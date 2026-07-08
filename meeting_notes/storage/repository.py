@@ -23,6 +23,16 @@ class Folder:
 
 
 @dataclass
+class Chat:
+    """A saved Ask Earshot conversation. `messages` is a list of
+    {role: 'you'|'answer'|'error', text: str, citations?: list, scope?: str}."""
+    id: Optional[int] = None
+    title: str = "New chat"
+    messages: list = field(default_factory=list)
+    updated_at: Optional[str] = None
+
+
+@dataclass
 class Meeting:
     id: Optional[int] = None
     title: Optional[str] = None
@@ -209,6 +219,58 @@ class MeetingRepository:
                 (folder_id,),
             )
             self.conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+            self.conn.commit()
+
+    # ---------- Ask Earshot chat history ----------
+    def create_chat(self, title: str, messages: list) -> int:
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO ask_chats (title, messages_json) VALUES (?, ?)",
+                (title or "New chat", json.dumps(messages or [])),
+            )
+            self.conn.commit()
+            return int(cur.lastrowid)
+
+    def update_chat(self, chat_id: int, *, title: Optional[str] = None,
+                    messages: Optional[list] = None) -> None:
+        sets, vals = ["updated_at = datetime('now')"], []
+        if title is not None:
+            sets.append("title = ?")
+            vals.append(title)
+        if messages is not None:
+            sets.append("messages_json = ?")
+            vals.append(json.dumps(messages))
+        vals.append(chat_id)
+        with self._lock:
+            self.conn.execute(f"UPDATE ask_chats SET {', '.join(sets)} WHERE id = ?", vals)
+            self.conn.commit()
+
+    def list_chats(self, limit: int = 50) -> list[Chat]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, title, updated_at FROM ask_chats ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [Chat(id=r["id"], title=r["title"], updated_at=r["updated_at"]) for r in rows]
+
+    def get_chat(self, chat_id: int) -> Optional[Chat]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM ask_chats WHERE id = ?", (chat_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            messages = json.loads(row["messages_json"] or "[]")
+        except json.JSONDecodeError:
+            messages = []
+        return Chat(id=row["id"], title=row["title"],
+                    messages=messages if isinstance(messages, list) else [],
+                    updated_at=row["updated_at"])
+
+    def delete_chat(self, chat_id: int) -> None:
+        with self._lock:
+            self.conn.execute("DELETE FROM ask_chats WHERE id = ?", (chat_id,))
             self.conn.commit()
 
     def recover_interrupted(self) -> int:

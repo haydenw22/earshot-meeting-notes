@@ -4,6 +4,17 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] — 2026-07-08 · Ask Earshot: drafting, copy & chat history
+
+### Added
+
+- Ask Earshot now saves your conversations. A new History button next to New chat lists your past chats (auto-named from your first question) so you can reopen and continue them.
+- You can select and copy answer text, and each answer has a Copy button that puts the whole response on your clipboard — handy for pasting into a team chat or email.
+
+### Changed
+
+- Ask Earshot will now draft the emails, messages and other follow-ups your meetings call for, instead of refusing because a task was "assigned to you". If details are missing it fills the gaps with [brackets] for you to complete. (Earshot Plus users get this once the server updates.)
+
 ## [0.30.2] — 2026-07-07 · Copy action items: approved only
 
 ### Changed

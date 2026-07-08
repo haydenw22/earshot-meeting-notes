@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS folders (
     color TEXT NOT NULL DEFAULT '#6366F1',
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Saved "Ask Earshot" conversations so they can be revisited from history.
+CREATE TABLE IF NOT EXISTS ask_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT 'New chat',
+    messages_json TEXT NOT NULL DEFAULT '[]',   -- [{role, text, citations?, scope?}]
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
