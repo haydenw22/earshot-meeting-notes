@@ -10,7 +10,7 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -111,9 +111,15 @@ class Shell(QMainWindow):
         self.cfg = cfg
         self.theme = theme
         self.setWindowTitle("Earshot")
-        # Wispr-Flow-like default viewport: roomy enough for the two-column
-        # Settings screen and side-by-side plan cards.
-        self.resize(1336, 843)
+        # Launch size 1800x1200, clamped so the window never opens larger than
+        # the screen it lands on (a 1080p display is only 1080px tall).
+        w, h = 1800, 1200
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            w = min(w, max(960, avail.width() - 40))
+            h = min(h, max(620, avail.height() - 60))
+        self.resize(w, h)
         self.setMinimumSize(960, 620)
 
         self.home = HomePage(self, repo, cfg, theme)

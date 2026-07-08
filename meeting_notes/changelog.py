@@ -19,6 +19,14 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.30.1", "2026-07-07", "Bigger launch window",
+        (
+            ("Changed", (
+                "Earshot now opens at 1800 x 1200 (clamped to fit smaller screens).",
+            )),
+        ),
+    ),
+    Release(
         "0.30.0", "2026-07-07", "Copy menu: all, action items, or summary",
         (
             ("Added", (

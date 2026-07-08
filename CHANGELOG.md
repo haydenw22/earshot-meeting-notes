@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.30.1] — 2026-07-07 · Bigger launch window
+
+### Changed
+
+- Earshot now opens at 1800 x 1200 (clamped to fit smaller screens).
+
 ## [0.30.0] — 2026-07-07 · Copy menu: all, action items, or summary
 
 ### Added
