@@ -102,13 +102,20 @@ def to_plaintext(notes: dict, *, title: str = "", date_text: str = "", attendees
 
 
 def todo_markdown(notes: dict) -> str:
-    """Action items as PLAIN-TEXT markdown to-dos that Notion converts to real
-    checkbox blocks on paste: '- [ ] task' / '- [x] task'. Keep this off the
-    HTML clipboard flavour — Notion only parses the markdown when it receives
-    plain text. **bold** markers are kept (Notion renders them); owner, due
-    date and the suggestion marker ride along in parentheses."""
+    """Approved action items as PLAIN-TEXT markdown to-dos that Notion converts
+    to real checkbox blocks on paste: '- [ ] task' / '- [x] task'. Keep this off
+    the HTML clipboard flavour — Notion only parses the markdown when it receives
+    plain text. **bold** markers are kept (Notion renders them); owner and due
+    date ride along in parentheses.
+
+    Only APPROVED items are included: AI suggestions the user hasn't kept
+    (confirmed=False) are excluded — a to-do list you paste elsewhere shouldn't
+    carry unapproved guesses. (Legacy items with no `confirmed` flag count as
+    approved, matching the Todoist/dashboard gating.)"""
     lines = []
     for a in notes.get("action_items") or []:
+        if not a.get("confirmed", True):
+            continue  # unkept AI suggestion — not a real to-do
         box = "x" if a.get("done") else " "
         bits = []
         if a.get("owner"):
@@ -116,8 +123,6 @@ def todo_markdown(notes: dict) -> str:
         due = due_label(a.get("due"))
         if due:
             bits.append(f"due {due}")
-        if not a.get("confirmed", True) and not a.get("done"):
-            bits.append("suggested")
         suffix = f" ({', '.join(bits)})" if bits else ""
         task = (a.get("task") or "").strip()
         lines.append(f"- [{box}] {task}{suffix}")

@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.30.2] — 2026-07-07 · Copy action items: approved only
+
+### Changed
+
+- "Copy action items" now copies only the action items you've approved. AI suggestions you haven't kept are left out, so the to-do list you paste into Notion is clean. "Copy all" still shows suggestions exactly as they appear in Earshot.
+
 ## [0.30.1] — 2026-07-07 · Bigger launch window
 
 ### Changed

@@ -111,15 +111,23 @@ def main() -> int:
     mm = repo.get(m.id)
     check("share-HTML marks suggestions", share.to_share_html(mm).count("(suggested)") == 1)
 
-    print("== render: Notion to-do markdown + summary-only + agenda ==")
-    md = render.todo_markdown(NOTES)
+    print("== render: Notion to-do markdown = APPROVED items only ==")
+    todo_notes = {"action_items": [
+        {"task": "Send **budget**", "owner": "Sam", "done": False, "confirmed": True},   # approved, open
+        {"task": "Ship it", "owner": None, "done": True, "confirmed": True},             # approved, done
+        {"task": "Legacy item", "owner": None, "done": False},                            # no flag -> approved
+        {"task": "AI suggestion", "owner": "Priya", "done": False, "confirmed": False},   # suggestion -> excluded
+        {"task": "Suggested but done", "owner": None, "done": True, "confirmed": False},  # suggestion -> excluded
+    ]}
+    md = render.todo_markdown(todo_notes)
     md_lines = md.splitlines()
-    check("one markdown line per action item", len(md_lines) == len(NOTES["action_items"]))
-    check("open items render as '- [ ]'", md_lines[0].startswith("- [ ] "))
-    check("done items render as '- [x]'",
-          any(ln.startswith("- [x] ") and "Suggested but done" in ln for ln in md_lines))
-    check("owner rides along in parentheses", "(Sam)" in md_lines[0])
-    check("suggestions marked in the to-do list", sum("suggested" in ln for ln in md_lines) >= 1)
+    check("only the 3 approved items are copied (2 suggestions excluded)", len(md_lines) == 3)
+    check("open approved item renders as '- [ ]'", "- [ ] Send **budget** (Sam)" in md)
+    check("done approved item renders as '- [x]'", "- [x] Ship it" in md)
+    check("legacy item (no confirmed flag) is treated as approved", "Legacy item" in md)
+    check("AI suggestion is NOT copied", "AI suggestion" not in md)
+    check("suggested-but-done is NOT copied", "Suggested but done" not in md)
+    check("no '(suggested)' marker in the output", "suggested" not in md.lower())
     check("no em dashes in the to-do markdown", "—" not in md)
 
     s_html = render.to_html(NOTES, agenda="Talk pricing", include_actions=False)
@@ -143,6 +151,7 @@ def main() -> int:
     cb = _QApp.clipboard().mimeData()
     check("copy action items puts markdown to-dos on the clipboard",
           cb.text().startswith("- [") and "- [ ] Accepted open (Sam)" in cb.text())
+    check("copy action items EXCLUDES suggestions", "Suggested open" not in cb.text())
     check("copy action items is PLAIN TEXT only (Notion needs it to parse '- [ ]')",
           not cb.hasHtml())
     page._copy_summary_only()
@@ -152,6 +161,8 @@ def main() -> int:
     page._copy_all()
     cb = _QApp.clipboard().mimeData()
     check("copy all includes action items", "Accepted open" in cb.text())
+    check("copy all still shows suggestions as they appear in Earshot",
+          "Suggested open" in cb.text())
     # leave the clipboard empty: offscreen Qt segfaults at interpreter exit
     # tearing down a clipboard that still owns our QMimeData
     _QApp.clipboard().clear()
