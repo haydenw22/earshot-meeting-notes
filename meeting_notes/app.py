@@ -103,4 +103,12 @@ def run() -> int:
         window.on_account_changed()
 
     window.show()
+
+    # Packaged Windows builds check GitHub for a newer release in the background;
+    # if one is found the user gets an "Update available" dialog with the
+    # changelog and a one-click download+install. Kept on the window so the
+    # worker thread isn't garbage-collected mid-check. No-op for dev checkouts.
+    from .ui.update_dialog import schedule_update_check
+    window._update_worker = schedule_update_check(window, theme)
+
     return app.exec()

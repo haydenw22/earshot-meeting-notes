@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] — 2026-07-09 · Automatic updates
+
+### Added
+
+- Earshot now keeps itself up to date. On launch it checks for a new version, and when one is available it shows you what's changed with a one-click "Download & install" button that swaps in the update and reopens the app. Your recordings and meeting database are never touched by an update.
+
 ## [0.31.1] — 2026-07-09 · Fix crash when signing in
 
 ### Fixed

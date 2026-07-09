@@ -51,3 +51,4 @@ jobs:
           python tests/test_pages.py
           python tests/test_cloud.py
           python tests/test_onboarding.py
+          python tests/test_updater.py

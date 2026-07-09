@@ -1031,5 +1031,8 @@ class Shell(QMainWindow):
         # with a live QThread aborts the process (0xC0000409) instead of a clean
         # quit. This covers the transcription/summary/import/finalise workers the
         # guard above warns about.
+        uw = getattr(self, "_update_worker", None)  # the startup update-check QThread
+        if uw is not None and uw.isRunning():
+            uw.wait(3000)
         workers.join_all()
         event.accept()
