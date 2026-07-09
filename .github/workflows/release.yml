@@ -1,0 +1,89 @@
+name: Release
+
+# Publishes a GitHub Release (with the Windows installer) for every version.
+#   - push a tag like v0.31.0  -> builds the installer AND publishes the release
+#   - run manually (workflow_dispatch) -> builds the installer as an artifact
+#     ONLY, no release published (a safe dry run of the whole pipeline)
+#
+# One installer asset per release: EarshotSetup.exe (stable name, so the
+# /releases/latest/download/EarshotSetup.exe permalink always works).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write        # required to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest   # PyAudioWPatch (WASAPI loopback) is Windows-only
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies (pinned) + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.txt
+          pip install pyinstaller
+
+      - name: Verify tag matches __version__ (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          pkg=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' meeting_notes/__init__.py | head -1 | tr -d '"')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package __version__ = $pkg ; tag = $tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::Tag v$tag does not match meeting_notes.__version__ ($pkg)."
+            exit 1
+          fi
+
+      - name: Version/changelog lockstep test
+        run: python tests/test_changelog.py
+
+      - name: Build app (PyInstaller one-folder)
+        run: python -m PyInstaller packaging/meeting_notes.spec --noconfirm --clean --distpath dist --workpath build
+
+      - name: Build installer (Inno Setup) and name it EarshotSetup.exe
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+          $exe = Get-ChildItem dist\Earshot-Setup-*.exe | Select-Object -First 1
+          if (-not $exe) { throw "installer not produced in dist\" }
+          Copy-Item $exe.FullName dist\EarshotSetup.exe -Force
+          Write-Host "built $($exe.Name) ($([math]::Round($exe.Length/1MB,1)) MB) -> EarshotSetup.exe"
+
+      - name: Upload installer artifact (always; the dry-run output)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EarshotSetup
+          path: dist/EarshotSetup.exe
+          if-no-files-found: error
+
+      - name: Compose release notes from CHANGELOG (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: python packaging/release_notes.py "${GITHUB_REF_NAME#v}" > RELEASE_NOTES.md
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Earshot ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: dist/EarshotSetup.exe
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
