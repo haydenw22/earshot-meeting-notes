@@ -227,6 +227,15 @@ def main() -> int:
     check("cloud keeps the General tab", "General" in cloud_tabs)
     check("cloud keeps the About tab", "About" in cloud_tabs)
     check("Setup guide button still present in cloud mode", hasattr(spage, "run_guide_btn"))
+    # Regression (v0.31.1): local->cloud dropped the Transcription pane but left
+    # self.test_btn pointing at the now-deleted C++ widget. Once the event loop
+    # processed the deletion, the next apply_theme() raised "Internal C++ object
+    # already deleted" -> a crash on first sign-in. refresh_tabs must clear the
+    # stale attr, and apply_theme must be safe after the button is really gone.
+    check("cloud clears the stale Transcription test_btn ref", not hasattr(spage, "test_btn"))
+    app.processEvents()  # actually delete the removed pane's C++ objects
+    spage.apply_theme()  # must NOT raise on the absent test button
+    check("apply_theme after sign-in switch does not crash", True)
 
     print("== settings: tabs reappear after sign-out (cloud → selfhost) ==")
     scfg.account_mode = "selfhost"

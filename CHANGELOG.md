@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.31.1] — 2026-07-09 · Fix crash when signing in
+
+### Fixed
+
+- Signing in to Earshot Plus (entering your device code) no longer crashes the app. Switching from local to cloud mode left a stale reference to a settings button that had just been removed, raising an "Internal C++ object already deleted" error the first time you signed in.
+
 ## [0.31.0] — 2026-07-08 · Ask Earshot: drafting, copy & chat history
 
 ### Added

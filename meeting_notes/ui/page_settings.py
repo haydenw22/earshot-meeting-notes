@@ -133,6 +133,14 @@ class SettingsPage(QWidget):
                 w.deleteLater()
         self._nav_buttons.clear()
         self._pane_widgets.clear()
+        # The Transcription pane (and its test_btn) is omitted in cloud mode, so
+        # after the rebuild below self.test_btn would point at a deleted C++
+        # widget while the Python attribute lingers — apply_theme()'s
+        # hasattr(test_btn) guard then passes and .setIcon() raises "Internal C++
+        # object already deleted". Drop the stale attr so it's only present when
+        # the pane (and button) is actually rebuilt. (Crash on first sign-in.)
+        if hasattr(self, "test_btn"):
+            del self.test_btn
 
         self._cloud_mode = self.cfg.account_mode == "cloud"
 
