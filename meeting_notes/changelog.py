@@ -19,6 +19,19 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.32.2", "2026-07-10", "The ghost window flash is actually gone",
+        (
+            ("Fixed", (
+                "The ghost window that flashed when opening Overview survived "
+                "0.32.1: that release fixed one cause, but the meeting list and "
+                "the To do card were also briefly shown as their own window while "
+                "the page was being built. Both are fixed, and a new automated "
+                "test now fails the build if any part of the app can ever appear "
+                "as a stray window again.",
+            )),
+        ),
+    ),
+    Release(
         "0.32.1", "2026-07-10", "Fix the ghost window flash",
         (
             ("Fixed", (

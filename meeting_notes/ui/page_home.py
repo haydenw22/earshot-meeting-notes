@@ -441,9 +441,12 @@ class HomePage(QWidget):
                 body_lay.addWidget(self._chip_row(folders, meetings))
             for m in shown:
                 body_lay.addWidget(MeetingRow(m, self.theme, self.repo, self.shell, folders_by_id))
-            body.setVisible(not self.cfg.meetings_collapsed)
+            # Parent FIRST, then set visibility: setVisible(True) on a widget
+            # that has no parent yet shows it as its own top-level window (the
+            # ghost "Earshot" flash Hayden screenshotted, twice).
             self._meetings_host = body
             self.list_lay.addWidget(body)
+            body.setVisible(not self.cfg.meetings_collapsed)
             self.list_lay.addStretch(1)
 
         # right rail
@@ -670,9 +673,10 @@ class HomePage(QWidget):
             footer.clicked.connect(self._toggle_todo_show_all)
             body_lay.addWidget(footer)
 
-        body.setVisible(not self.cfg.dashboard_collapsed)
+        # parent first, then set visibility (see the meetings body note above)
         self._dash_items_host = body
         lay.addWidget(body)
+        body.setVisible(not self.cfg.dashboard_collapsed)
 
         self._set_dashboard_chevron_icon()
         return card
