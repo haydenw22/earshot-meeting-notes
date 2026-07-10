@@ -126,6 +126,7 @@ class SettingsPage(QWidget):
         while self.stack.count():
             w = self.stack.widget(0)
             self.stack.removeWidget(w)
+            w.hide()  # detach hidden — a visible detach flashes a ghost window
             if w in persistent:
                 w.setParent(None)
             else:

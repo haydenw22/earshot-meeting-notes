@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.32.1] — 2026-07-10 · Fix the ghost window flash
+
+### Fixed
+
+- A translucent ghost copy of the app could flash on screen for a split second when opening Overview or refreshing a page. Gone.
+
 ## [0.32.0] — 2026-07-09 · Automatic updates
 
 ### Added

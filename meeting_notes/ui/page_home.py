@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from ..storage.repository import Meeting
 from . import icons
-from .widgets import Card, ElideLabel, make_chip, status_chip
+from .widgets import Card, ElideLabel, clear_layout, make_chip, status_chip
 
 # Rail collapses below this viewport width (spec: "responsive — below ~1050px
 # hide the right rail").
@@ -406,13 +406,10 @@ class HomePage(QWidget):
     def refresh(self) -> None:
         # clear list + rail — detach synchronously (deleteLater alone leaves
         # orphan widgets parented to the container until the event loop runs).
+        # clear_layout hides before detaching: detaching visible widgets made
+        # the whole meeting list flash as a ghost top-level window on Windows.
         for lay in (self.list_lay, self.rail_lay):
-            while lay.count():
-                item = lay.takeAt(0)
-                w = item.widget()
-                if w:
-                    w.setParent(None)
-                    w.deleteLater()
+            clear_layout(lay)
 
         meetings = self.repo.list()
         folders = self.repo.list_folders()

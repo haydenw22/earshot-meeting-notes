@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from . import icons
 from .page_home import MeetingRow
-from .widgets import FOLDER_COLORS
+from .widgets import FOLDER_COLORS, clear_layout
 
 
 class ProjectPage(QWidget):
@@ -99,12 +99,7 @@ class ProjectPage(QWidget):
 
     # ---------- render ----------
     def refresh(self) -> None:
-        while self.list_lay.count():
-            item = self.list_lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(self.list_lay)
 
         meetings = self.repo.list()
         folders_by_id = {f.id: f for f in self.repo.list_folders()}

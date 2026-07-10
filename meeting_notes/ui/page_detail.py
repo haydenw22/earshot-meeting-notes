@@ -35,7 +35,7 @@ from ..capture import screen as screen_capture
 from ..util import stats as _stats
 
 from ..storage.repository import Meeting
-from .widgets import Card, make_chip, status_chip
+from .widgets import Card, clear_layout, make_chip, status_chip
 from .workers import FuncWorker
 
 
@@ -214,11 +214,13 @@ class DetailPage(QWidget):
             return
         self.title.setText(m.title or "Untitled meeting")
 
-        # rebuild meta chips
+        # rebuild meta chips (keep the trailing stretch item; hide before
+        # detaching so the chips can't flash as a ghost top-level window)
         while self.meta_row.count() > 1:
             item = self.meta_row.takeAt(0)
             w = item.widget()
             if w:
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
         idx = 0
@@ -320,12 +322,7 @@ class DetailPage(QWidget):
 
     def _populate_attendees(self, attendees: list[str]) -> None:
         from .widgets import make_chip
-        while self.att_panel_lay.count():
-            item = self.att_panel_lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(self.att_panel_lay)
         for name in attendees:
             self.att_panel_lay.addWidget(
                 make_chip(name, fg=self.theme.color("primary"), bg=self.theme.color("primary_soft"))
@@ -340,12 +337,7 @@ class DetailPage(QWidget):
 
     # ---------- notes rendering (agenda, summary, checkbox actions, sections) ----------
     def _render_notes(self, m) -> None:
-        while self.notes_lay.count():
-            item = self.notes_lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(self.notes_lay)
 
         if m.agenda and m.agenda.strip():
             self.notes_lay.addWidget(self._notes_heading("Agenda"))
@@ -554,12 +546,7 @@ class DetailPage(QWidget):
         from ..util.dues import due_label
 
         rl = row.layout()
-        while rl.count():
-            item = rl.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(rl)
         task_edit = QLineEdit(a.get("task") or "")
         task_edit.setPlaceholderText("What needs doing")
         owner_edit = QLineEdit(a.get("owner") or "")
@@ -664,12 +651,7 @@ class DetailPage(QWidget):
 
     # ---------- bookmarks ----------
     def _render_bookmarks(self, m) -> None:
-        while self.bookmarks_row.count():
-            item = self.bookmarks_row.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(self.bookmarks_row)
         bms = m.bookmarks or []
         self.bookmarks_host.setVisible(bool(bms))
         if not bms:
@@ -778,12 +760,7 @@ class DetailPage(QWidget):
     # ---------- screenshots ----------
     def _render_screenshots(self, m) -> None:
         self._screen_meeting = m
-        while self.screen_grid.count():
-            item = self.screen_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(self.screen_grid)
         shots = screen_capture.list_screenshots(Path(m.audio_dir)) if m.audio_dir else []
         self.tabs.setTabVisible(self._screen_tab_index, bool(shots))
         if not shots:

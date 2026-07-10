@@ -37,7 +37,7 @@ from .page_home import HomePage
 from .page_project import ProjectPage
 from .page_record import RecordPage
 from .page_settings import SettingsPage
-from .widgets import FOLDER_COLORS
+from .widgets import FOLDER_COLORS, clear_layout
 
 
 class AccountCard(QFrame):
@@ -197,6 +197,12 @@ class Shell(QMainWindow):
         the width. Only one of {rail, sidebar} is visible at a time."""
         w = max(180, int(self.cfg.sidebar_width or 258))
         side = "right" if self.cfg.sidebar_side == "right" else "left"
+        # Live re-arrange (sidebar side change): hide before detaching, or all
+        # three panes flash as ghost top-level windows. Skipped at first build
+        # (nothing visible yet — and an explicit hide then would stick).
+        if self.splitter.isVisible():
+            for pane in (self.rail, self.sidebar, self.stack):
+                pane.hide()
         self.rail.setParent(None)
         self.sidebar.setParent(None)
         self.stack.setParent(None)
@@ -795,12 +801,7 @@ class Shell(QMainWindow):
         an always-present Uncategorized project for unfiled notes. Rows only —
         the meetings themselves open in the main window."""
         lay = self.projects_lay
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(lay)
 
         meetings = self.repo.list()
         counts: dict = {}

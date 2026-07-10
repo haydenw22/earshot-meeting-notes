@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons
-from .widgets import add_shadow, make_chip
+from .widgets import add_shadow, clear_layout, make_chip
 
 FREE_FEATURES = [
     "Record unlimited meetings, stored on this PC",
@@ -80,12 +80,7 @@ class PlansPage(QWidget):
     # ---------- (re)build ----------
     def _rebuild_cards(self) -> None:
         lay = self._host_lay
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(lay)
         # per-mode widgets from the previous build are deleted C++ objects now
         for attr in ("usage_bar", "usage_lbl", "banner_title", "banner_sub",
                      "upgrade_btn", "billing_btn"):

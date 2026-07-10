@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons
-from .widgets import Card, make_chip
+from .widgets import Card, clear_layout, make_chip
 
 LEARN_MORE_URL = "https://tryearshot.app"
 
@@ -85,12 +85,7 @@ class AccountPage(QWidget):
 
     def _rebuild_cards(self) -> None:
         lay = self._host_lay
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(lay)
         # drop references to per-mode widgets from the previous build — they're
         # now deleted C++ objects, so touching them (e.g. from apply_theme) would
         # raise. Whichever card is rebuilt below re-sets the ones it owns.
@@ -268,12 +263,7 @@ class AccountPage(QWidget):
     def _set_status_chip(self, sub_status: str) -> None:
         # clear any existing chip
         lay = self.status_chip_holder.layout()
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(lay)
         label, fg, bg = _STATUS_CHIP.get(sub_status, ("", "text_muted", "surface_hover"))
         if label:
             lay.addWidget(make_chip(label, fg=self.theme.color(fg), bg=self.theme.color(bg)))

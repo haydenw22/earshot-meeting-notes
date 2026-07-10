@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from ..qa.ask import Answer
 from ..util.dates import iso_date
 from . import icons
-from .widgets import Card
+from .widgets import Card, detach_for_delete
 from .workers import FuncWorker
 
 _RECENT_MEETINGS_LIMIT = 15
@@ -295,8 +295,7 @@ class AskPage(QWidget):
             QMessageBox.warning(self, "AI not configured", notes_service.missing_hint(self.cfg))
             return
         if self._empty is not None:
-            self._empty.setParent(None)
-            self._empty.deleteLater()
+            detach_for_delete(self._empty)
             self._empty = None
         self.input.clear()
         self._render_bubble(q, role="you")
@@ -318,15 +317,13 @@ class AskPage(QWidget):
         self.worker.start()
 
     def _on_answer(self, ans, thinking: QWidget) -> None:
-        thinking.setParent(None)
-        thinking.deleteLater()
+        detach_for_delete(thinking)
         self._render_answer(ans)
         self._record("answer", ans.text, citations=list(ans.citations or []), scope=ans.scope)
         self._set_busy(False)
 
     def _on_failed(self, msg: str, thinking: QWidget) -> None:
-        thinking.setParent(None)
-        thinking.deleteLater()
+        detach_for_delete(thinking)
         text = f"Sorry — {msg}"
         self._render_bubble(text, role="error")
         self._record("error", text)
@@ -345,8 +342,7 @@ class AskPage(QWidget):
             w = self.chat_lay.itemAt(i).widget()
             if w:
                 self.chat_lay.takeAt(i)
-                w.setParent(None)
-                w.deleteLater()
+                detach_for_delete(w)
             else:
                 i += 1  # keep the trailing stretch
         self._empty = None

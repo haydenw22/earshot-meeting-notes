@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import icons
-from .widgets import Card
+from .widgets import Card, clear_layout
 
 WEBSITE_URL = "https://tryearshot.app"
 ISSUES_URL = "https://github.com/haydenw22/earshot-meeting-notes/issues"
@@ -163,12 +163,7 @@ class HelpPage(QWidget):
         """(Re)build the guide cards. Step badges and section icons bake theme
         colours into stylesheets/pixmaps, so a theme flip rebuilds the content."""
         lay = self._host_lay
-        while lay.count():
-            item = lay.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        clear_layout(lay)
         lay.addWidget(self._getting_started_card())
         for icon_name, title, entries in _SECTIONS:
             lay.addWidget(self._section_card(icon_name, title, entries))

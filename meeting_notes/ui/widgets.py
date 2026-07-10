@@ -26,6 +26,32 @@ from PySide6.QtWidgets import (
 )
 
 
+def clear_layout(lay) -> None:
+    """Remove and delete every widget in a layout, without the Windows ghost
+    flash: hide() must come BEFORE setParent(None), because detaching a
+    still-visible widget promotes it to a top-level native window for a frame
+    (a translucent "Earshot" window with its own title bar) before deleteLater
+    runs. Hidden widgets detach silently. Nested layouts clear recursively."""
+    while lay.count():
+        item = lay.takeAt(0)
+        w = item.widget()
+        if w is not None:
+            w.hide()
+            w.setParent(None)
+            w.deleteLater()
+        else:
+            sub = item.layout()
+            if sub is not None:
+                clear_layout(sub)
+
+
+def detach_for_delete(w: QWidget) -> None:
+    """Detach + delete a single widget safely (hide first — see clear_layout)."""
+    w.hide()
+    w.setParent(None)
+    w.deleteLater()
+
+
 def add_shadow(widget: QWidget, *, blur: int = 34, dy: int = 8, alpha: int = 26) -> None:
     """Apply a soft drop shadow (the 'elevation' of a card)."""
     eff = QGraphicsDropShadowEffect(widget)
