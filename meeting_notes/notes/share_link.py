@@ -20,7 +20,9 @@ def publish(m, *, base_url: str, token: str, include_transcript: bool = False) -
     payload = to_share_payload(m, include_transcript=include_transcript)
     data = _post_json(base_url, token, "/v1/share", payload)
     url = (data.get("url") or "").strip()
-    if not url.startswith("https://"):
+    # https only, except loopback (mirrors the cloud_api_base rule for dev)
+    ok = url.startswith("https://") or url.startswith(("http://127.0.0.1", "http://localhost"))
+    if not ok:
         raise CloudError("Earshot Plus returned an unexpected share URL.")
     return url
 
