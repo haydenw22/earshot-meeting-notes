@@ -70,6 +70,7 @@ _MIGRATIONS = {
     "template": "ALTER TABLE meetings ADD COLUMN template TEXT",
     "bookmarks": "ALTER TABLE meetings ADD COLUMN bookmarks TEXT",
     "folder_id": "ALTER TABLE meetings ADD COLUMN folder_id INTEGER",
+    "share_url": "ALTER TABLE meetings ADD COLUMN share_url TEXT",
 }
 
 

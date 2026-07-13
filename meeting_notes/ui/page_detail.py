@@ -165,7 +165,7 @@ class DetailPage(QWidget):
         btns.setSpacing(10)
         self.copy_btn = self._action("Copy", None)
         self.copy_btn.setProperty("variant", "primary")
-        self.share_btn = self._action("Share…", self._share_html)
+        self.share_btn = self._action("Share…", self._share)
         self.todoist_btn = self._action("To Todoist", self._send_todoist)
         self.more_btn = self._action("More", None)
         self.delete_btn = self._action("Delete", self._delete)
@@ -373,10 +373,11 @@ class DetailPage(QWidget):
 
         actions = notes.get("action_items") or []
         if actions:
-            self.notes_lay.addWidget(self._notes_heading("Action items"))
             # legacy items (no 'confirmed' key) count as accepted
-            if any(isinstance(a, dict) and not a.get("confirmed", True) and not a.get("done")
-                   for a in actions):
+            has_suggestions = any(isinstance(a, dict) and not a.get("confirmed", True)
+                                  and not a.get("done") for a in actions)
+            self.notes_lay.addWidget(self._actions_header(has_suggestions))
+            if has_suggestions:
                 hint = QLabel("Suggested by the AI — keep ✓ the real ones (they join your "
                               "to-do list), edit ✎ to correct, or dismiss ✕.")
                 hint.setObjectName("Faint")
@@ -399,6 +400,40 @@ class DetailPage(QWidget):
         lbl.setObjectName("H3")
         lbl.setContentsMargins(0, 12, 0, 2)
         return lbl
+
+    def _actions_header(self, has_suggestions: bool) -> QWidget:
+        """The "Action items" heading, with bulk Keep all / Delete all buttons
+        while there are AI suggestions awaiting triage."""
+        head = QWidget()
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 12, 0, 2)
+        hl.setSpacing(8)
+        heading = QLabel("Action items")
+        heading.setObjectName("H3")
+        hl.addWidget(heading)
+        hl.addStretch(1)
+        if has_suggestions:
+            keep_all = self._mini_btn("✓ Keep all", "Accept every suggested action item",
+                                      accent=True)
+            keep_all.clicked.connect(lambda _=False: self._keep_all_actions())
+            delete_all = self._mini_btn("✕ Delete all", "Dismiss every suggested action item")
+            delete_all.clicked.connect(lambda _=False: self._delete_all_suggestions())
+            hl.addWidget(keep_all)
+            hl.addWidget(delete_all)
+        return head
+
+    def _keep_all_actions(self) -> None:
+        def fn(actions):
+            for a in actions:
+                if isinstance(a, dict):
+                    a["confirmed"] = True
+        self._mutate_actions(fn)
+
+    def _delete_all_suggestions(self) -> None:
+        def fn(actions):
+            actions[:] = [a for a in actions
+                          if not isinstance(a, dict) or a.get("confirmed", True) or a.get("done")]
+        self._mutate_actions(fn)
 
     def _mini_btn(self, text: str, tooltip: str, *, accent: bool = False) -> QPushButton:
         b = QPushButton(text)
@@ -960,24 +995,32 @@ class DetailPage(QWidget):
         self._todoist_worker.failed.connect(failed)
         self._todoist_worker.start()
 
-    def _share_html(self) -> None:
-        """Export the meeting as a single self-contained HTML file to send around
-        — the local-first version of a share link."""
+    def _share(self) -> None:
+        """Share the meeting: a standalone HTML file (always local), or — on
+        Earshot Plus — a public link hosted on tryearshot.app."""
         if self.meeting_id is None:
             return
         m = self.repo.get(self.meeting_id)
-        box = QMessageBox(self)
-        box.setWindowTitle("Share meeting")
-        box.setText("Export this meeting as a standalone HTML file you can send to anyone.")
-        notes_only = box.addButton("Notes only", QMessageBox.ButtonRole.AcceptRole)
-        with_tr = box.addButton("Notes + transcript", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton(QMessageBox.StandardButton.Cancel)
-        if not (m.transcript or "").strip():
-            with_tr.setEnabled(False)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked not in (notes_only, with_tr):
+        from .share_dialog import ShareDialog
+
+        dlg = ShareDialog(
+            self, self.theme,
+            title=m.title or "Untitled meeting",
+            has_transcript=bool((m.transcript or "").strip()),
+            cloud=(self.cfg.account_mode == "cloud"),
+            share_url=m.share_url or "",
+        )
+        if dlg.exec() != ShareDialog.DialogCode.Accepted or not dlg.choice:
             return
+        if dlg.choice == "file":
+            self._share_to_file(m, include_transcript=dlg.include_transcript)
+        elif dlg.choice == "link":
+            self._share_publish(m, include_transcript=dlg.include_transcript)
+        elif dlg.choice == "unshare":
+            self._share_unpublish(m)
+
+    def _share_to_file(self, m, *, include_transcript: bool) -> None:
+        """Export as a single self-contained HTML file — nothing leaves the PC."""
         from PySide6.QtWidgets import QFileDialog
 
         from ..notes import share
@@ -986,7 +1029,7 @@ class DetailPage(QWidget):
             self, "Save shareable file", f"{safe}.html", "Web page (*.html)")
         if not path:
             return
-        html_doc = share.to_share_html(m, include_transcript=(clicked is with_tr))
+        html_doc = share.to_share_html(m, include_transcript=include_transcript)
         try:
             Path(path).write_text(html_doc, encoding="utf-8")
         except OSError as e:
@@ -994,6 +1037,93 @@ class DetailPage(QWidget):
             return
         self.status_label.setText(f"Saved {Path(path).name} — opening preview…")
         os.startfile(path)  # noqa: S606
+
+    def _share_publish(self, m, *, include_transcript: bool) -> None:
+        """Create/update the public page off the GUI thread, then store the URL
+        and put it on the clipboard."""
+        if not m.share_url:
+            # first publish: make the consequences unmissable before uploading
+            what = "notes and full transcript" if include_transcript else "notes"
+            box = QMessageBox(self)
+            box.setWindowTitle("Create a public link?")
+            box.setText(
+                f"This uploads the meeting {what} to Earshot's servers and creates a "
+                "public web page.\n\nAnyone who has the link can view it. The link is "
+                "unguessable and isn't listed anywhere, and you can stop sharing at "
+                "any time from this dialog."
+            )
+            go = box.addButton("Create public link", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is not go:
+                return
+
+        base, token = self.cfg.cloud_api_base, self.cfg.cloud_token
+        meeting_id = self.meeting_id
+        self.share_btn.setEnabled(False)
+        self.status_label.setText("Publishing public link…")
+
+        def job(_progress):
+            from ..notes import share_link
+            return share_link.publish(m, base_url=base, token=token,
+                                      include_transcript=include_transcript)
+
+        def done(url: str) -> None:
+            self.share_btn.setEnabled(True)
+            self.repo.update(meeting_id, share_url=url)
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(url)
+            self.status_label.setText("Public link copied to clipboard.")
+            if self.meeting_id == meeting_id:
+                self.refresh()
+            box = QMessageBox(self)
+            box.setWindowTitle("Public link ready")
+            box.setText(f"The link is on your clipboard:\n\n{url}")
+            open_btn = box.addButton("Open in browser", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Ok)
+            box.exec()
+            if box.clickedButton() is open_btn:
+                import webbrowser
+                webbrowser.open(url)
+
+        def failed(msg: str) -> None:
+            self.share_btn.setEnabled(True)
+            self.status_label.setText("")
+            QMessageBox.critical(self, "Could not create the link", str(msg))
+
+        self._share_worker = FuncWorker(job)
+        self._share_worker.done.connect(done)
+        self._share_worker.failed.connect(failed)
+        self._share_worker.start()
+
+    def _share_unpublish(self, m) -> None:
+        """Take the public page down (off the GUI thread) and forget the URL."""
+        base, token = self.cfg.cloud_api_base, self.cfg.cloud_token
+        meeting_id = self.meeting_id
+        self.share_btn.setEnabled(False)
+        self.status_label.setText("Removing the public page…")
+
+        def job(_progress):
+            from ..notes import share_link
+            share_link.unpublish(int(m.id or 0), base_url=base, token=token)
+            return None
+
+        def done(_res) -> None:
+            self.share_btn.setEnabled(True)
+            self.repo.update(meeting_id, share_url=None)
+            self.status_label.setText("Stopped sharing — the public page is gone.")
+            if self.meeting_id == meeting_id:
+                self.refresh()
+
+        def failed(msg: str) -> None:
+            self.share_btn.setEnabled(True)
+            self.status_label.setText("")
+            QMessageBox.critical(self, "Could not stop sharing", str(msg))
+
+        self._unshare_worker = FuncWorker(job)
+        self._unshare_worker.done.connect(done)
+        self._unshare_worker.failed.connect(failed)
+        self._unshare_worker.start()
 
     # ---------- the Copy menu (all / action items / summary) ----------
     def _meeting_with_notes(self):

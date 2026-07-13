@@ -53,6 +53,49 @@ pre.transcript {
 """
 
 
+def to_share_payload(m, *, include_transcript: bool = False) -> dict:
+    """The structured JSON body for POST /v1/share (Earshot Plus public link).
+
+    The server renders + escapes the page itself — we send data only. Suggested
+    (unconfirmed) action items are left out: a public page shouldn't show AI
+    suggestions the user hasn't vetted.
+    """
+    notes = m.notes or {}
+    actions = []
+    for a in notes.get("action_items") or []:
+        if not isinstance(a, dict):
+            continue
+        if not (a.get("confirmed", True) or a.get("done")):
+            continue  # unvetted suggestion
+        due = due_label(a.get("due")) or ""
+        actions.append({
+            "task": str(a.get("task") or ""),
+            "owner": str(a.get("owner") or ""),
+            "due": f"due {due}" if due else "",
+            "done": bool(a.get("done")),
+            "confirmed": True,
+        })
+    sections = []
+    for sec in notes.get("sections") or []:
+        if not isinstance(sec, dict):
+            continue
+        sections.append({
+            "heading": str(sec.get("heading") or ""),
+            "bullets": [str(b) for b in (sec.get("bullets") or [])],
+        })
+    return {
+        "meeting_id": int(m.id or 0),
+        "title": str(notes.get("title") or m.title or "Meeting notes"),
+        "date_text": str(m.date_text or ""),
+        "duration_mins": int((m.duration_secs or 0) // 60),
+        "attendees": [str(a) for a in (m.attendees or notes.get("attendees") or [])],
+        "summary": str(notes.get("summary") or ""),
+        "action_items": actions,
+        "sections": sections,
+        "transcript": (m.transcript or "") if include_transcript else "",
+    }
+
+
 def to_share_html(m, *, include_transcript: bool = False) -> str:
     """A complete standalone HTML document for meeting `m` (a Meeting)."""
     notes = m.notes or {}

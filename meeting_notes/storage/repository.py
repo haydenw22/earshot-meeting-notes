@@ -52,6 +52,7 @@ class Meeting:
     notion_page_id: Optional[str] = None
     notion_synced_at: Optional[str] = None
     folder_id: Optional[int] = None
+    share_url: Optional[str] = None   # public Earshot Plus share link, if published
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -97,6 +98,7 @@ class Meeting:
             notion_page_id=d.get("notion_page_id"),
             notion_synced_at=d.get("notion_synced_at"),
             folder_id=d.get("folder_id"),
+            share_url=d.get("share_url"),
             created_at=d.get("created_at"),
             updated_at=d.get("updated_at"),
         )
@@ -108,7 +110,7 @@ class MeetingRepository:
     _WRITABLE = frozenset({
         "title", "date_text", "date_iso", "attendees", "agenda", "template", "bookmarks",
         "transcript", "notes_json", "audio_dir", "headphones_mode", "duration_secs",
-        "status", "error", "notion_page_id", "notion_synced_at", "folder_id",
+        "status", "error", "notion_page_id", "notion_synced_at", "folder_id", "share_url",
     })
 
     def __init__(self, conn: Optional[sqlite3.Connection] = None):
