@@ -37,8 +37,9 @@ unless you choose one.
 ## Why Earshot
 
 Every mainstream meeting-notes tool either sends a **bot** into your call
-(awkward, blockable, sometimes against policy) or streams your **audio to
-their cloud**. Earshot does neither:
+(awkward, blockable, sometimes against policy) or keeps your **recordings and
+transcripts in their cloud** — and several train their own models on your
+de-identified data by default. Earshot does neither:
 
 - It records on **two separate channels** right on your PC — your microphone
   ("me") and the system audio ("them"). Works with Zoom, Teams, Meet, Webex, a
@@ -65,6 +66,28 @@ recording overlay with per-channel level lights · bookmarks while recording ·
 talk-time analytics · optional screen-capture context · import of existing
 audio/video · crash-safe recording with automatic salvage · a "no input
 detected" warning before you waste an hour.
+
+## How it compares
+
+Otter, Fireflies, Fathom and Granola are all capable tools — most now offer
+some bot-free capture. What none of them offer is this combination:
+
+| | Earshot | Typical cloud notetaker |
+|---|---|---|
+| Recordings & transcripts | **Your PC only** | Vendor's cloud (usually US) |
+| Open source | **Yes — MIT, this repo** | No |
+| Bring your own AI / fully local | **Yes** | No |
+| Trains its models on your data | **Never** | Often, by default (opt-out) |
+| Price | **Free self-hosted · $9/mo managed** | ~$8–20/user/mo |
+
+Detailed, fact-checked head-to-heads (verified against each vendor's official
+pages): [vs Granola](https://tryearshot.app/earshot-vs-granola) ·
+[vs Otter](https://tryearshot.app/earshot-vs-otter) ·
+[vs Fireflies](https://tryearshot.app/earshot-vs-fireflies) ·
+[vs Fathom](https://tryearshot.app/earshot-vs-fathom) ·
+[full comparison](https://tryearshot.app/earshot-vs-alternatives). Related
+guides: [recording consent laws](https://tryearshot.app/recording-consent-laws)
+· [local vs cloud transcription](https://tryearshot.app/local-vs-cloud-meeting-transcription).
 
 ## Self-host quickstart (from source)
 
@@ -160,3 +183,11 @@ in-app under **Settings → About**.
 [MIT](LICENSE). The desktop app is fully open source; the optional
 [Earshot Plus](https://tryearshot.app) backend (managed transcription/AI,
 accounts, sync) is the paid, closed service that funds development.
+
+---
+
+<div align="center">
+
+If Earshot is useful to you, a ⭐ helps other people find it.
+
+</div>
