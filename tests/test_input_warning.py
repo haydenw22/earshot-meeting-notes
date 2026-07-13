@@ -30,11 +30,12 @@ def check(label, cond):
 
 
 class FakeRecorder:
-    def __init__(self, mic=0.0, them=0.0, elapsed=0.0):
+    def __init__(self, mic=0.0, them=0.0, elapsed=0.0, write_error=None):
         self.mic_level = mic
         self.them_level = them
         self.elapsed = elapsed
         self.running = True
+        self.write_error = write_error
 
 
 def main() -> int:
@@ -94,6 +95,16 @@ def main() -> int:
     page._on_poll()
     check("levels below the active threshold don't count", not page._mic_seen and not page._them_seen)
     check("warning shown for both", shown() and "microphone" in text() and "other side" in text())
+
+    print("== spool write failure overrides the input warning (danger banner) ==")
+    page._mic_seen = page._them_seen = True  # channels look healthy...
+    page._write_error_reported = True        # (repo stamping tested in test_audit_fixes)
+    page.recorder = FakeRecorder(mic=0.5, them=0.5, elapsed=30.0,
+                                 write_error="your microphone (OSError: disk full)")
+    page._on_poll()
+    check("write failure shows the banner even with healthy levels",
+          shown() and "recording problem" in text())
+    check("banner names the failing side", "your microphone" in text())
 
     print("== _stop is a no-op when idle (stale call-ended toast can't crash it) ==")
     # Regression: a stale "call ended — Stop & process?" toast could fire _stop

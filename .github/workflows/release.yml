@@ -5,8 +5,10 @@ name: Release
 #   - run manually (workflow_dispatch) -> builds the installer as an artifact
 #     ONLY, no release published (a safe dry run of the whole pipeline)
 #
-# One installer asset per release: EarshotSetup.exe (stable name, so the
-# /releases/latest/download/EarshotSetup.exe permalink always works).
+# One installer per release: EarshotSetup.exe (stable name, so the
+# /releases/latest/download/EarshotSetup.exe permalink always works), plus
+# EarshotSetup.exe.sha256 — the digest the in-app updater verifies before
+# executing anything.
 
 on:
   push:
@@ -35,7 +37,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock.txt
-          pip install pyinstaller
+          pip install pyinstaller==6.21.0
 
       - name: Verify tag matches __version__ (tags only)
         if: startsWith(github.ref, 'refs/tags/')
@@ -65,11 +67,23 @@ jobs:
           Copy-Item $exe.FullName dist\EarshotSetup.exe -Force
           Write-Host "built $($exe.Name) ($([math]::Round($exe.Length/1MB,1)) MB) -> EarshotSetup.exe"
 
+      # The in-app updater refuses to install anything without this digest: it
+      # downloads EarshotSetup.exe.sha256 from the release and verifies the
+      # installer hashes to exactly this value before executing it.
+      - name: Publish SHA-256 digest next to the installer
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\EarshotSetup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  EarshotSetup.exe" | Out-File dist\EarshotSetup.exe.sha256 -Encoding ascii
+          Write-Host "sha256 = $hash"
+
       - name: Upload installer artifact (always; the dry-run output)
         uses: actions/upload-artifact@v4
         with:
           name: EarshotSetup
-          path: dist/EarshotSetup.exe
+          path: |
+            dist/EarshotSetup.exe
+            dist/EarshotSetup.exe.sha256
           if-no-files-found: error
 
       - name: Compose release notes from CHANGELOG (tags only)
@@ -83,7 +97,9 @@ jobs:
         with:
           name: Earshot ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
-          files: dist/EarshotSetup.exe
+          files: |
+            dist/EarshotSetup.exe
+            dist/EarshotSetup.exe.sha256
           draft: false
           prerelease: false
           fail_on_unmatched_files: true

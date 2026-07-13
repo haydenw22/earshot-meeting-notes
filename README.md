@@ -101,7 +101,12 @@ version:
 - **LAN Whisper is plain HTTP** and unauthenticated by default — trusted
   networks only, or put TLS/auth in front.
 - AI prompts treat meeting content as untrusted data (spoken "prompt
-  injection" is fenced), and AI-generated text renders as plain text in the UI.
+  injection" is fenced). Ask Earshot answers render as plain text; custom AI
+  action results render as Markdown formatting only, with link activation
+  disabled.
+- **Automatic updates are verified.** The packaged app checks GitHub Releases
+  on launch; an installer only runs after it matches the SHA-256 digest
+  published with the release, over HTTPS from GitHub.
 
 ## Development
 

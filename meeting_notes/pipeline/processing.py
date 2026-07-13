@@ -141,13 +141,24 @@ def process_recording(
             except OSError:
                 pass
 
-        # 3. Transcribe both channels (parallel on cloud providers).
-        me_json, them_json = _transcribe_channels(me_16k, them_16k, cfg, progress)
+        # 3. Transcribe both channels (parallel on cloud providers). The 16 kHz
+        # upload derivatives are re-creatable from the raws, so they're removed
+        # afterwards (success or failure) instead of doubling every meeting's
+        # retained audio.
+        try:
+            me_json, them_json = _transcribe_channels(me_16k, them_16k, cfg, progress)
 
-        # Annotate each 'me' segment with mic-vs-system loudness so the merge can
-        # distinguish your speech from faint bleed (only matters off headphones).
-        if not m.headphones_mode:
-            _attach_channel_energy(me_json, me_16k, them_16k)
+            # Annotate each 'me' segment with mic-vs-system loudness so the merge
+            # can distinguish your speech from faint bleed (only matters off
+            # headphones).
+            if not m.headphones_mode:
+                _attach_channel_energy(me_json, me_16k, them_16k)
+        finally:
+            for p in (me_16k, them_16k):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
         # 4. Merge into one speaker-labelled transcript.
         progress("Merging transcript")
@@ -156,7 +167,7 @@ def process_recording(
         )
         repo.update(meeting_id, transcript=merged["text"])
         if cfg.webhook_when == "transcript":
-            _fire_webhook(repo, meeting_id, cfg, progress)
+            fire_webhook(repo, meeting_id, cfg, progress)
 
         # 5. Summarise (+ webhook on completion).
         _summarise(repo, meeting_id, cfg, m, merged["text"], summarize, progress)
@@ -188,8 +199,8 @@ def _summarise(repo, meeting_id, cfg, m, transcript: str, summarize: bool, progr
                 error=f"Notes failed: {note_err}",
             )
             progress(f"Transcribed — notes failed ({note_err})")
-            if cfg.webhook_when == "summary":
-                _fire_webhook(repo, meeting_id, cfg, progress)
+            # NO webhook here: "after the AI summary" means a summary actually
+            # exists. It fires when a later Re-summarise succeeds instead.
             return
         repo.update(
             meeting_id,
@@ -205,10 +216,13 @@ def _summarise(repo, meeting_id, cfg, m, transcript: str, summarize: bool, progr
         progress("Transcribed" if notes_service.ready(cfg)
                  else f"Transcribed (notes skipped — {notes_service.missing_hint(cfg)})")
     if cfg.webhook_when == "summary":
-        _fire_webhook(repo, meeting_id, cfg, progress)
+        fire_webhook(repo, meeting_id, cfg, progress)
 
 
-def _fire_webhook(repo, meeting_id, cfg, progress) -> None:
+def fire_webhook(repo, meeting_id, cfg, progress) -> None:
+    """Deliver the meeting to the user's webhook (no-op when none configured).
+    Public so Re-summarise can fire the 'after summary' webhook once a retry
+    finally produces notes."""
     if not (cfg.webhook_url or "").strip():
         return
     try:
@@ -255,7 +269,7 @@ def process_imported_file(repo, meeting_id, cfg, file_path: str, *, progress=Non
             raise ValueError("No speech found in the file.")
         repo.update(meeting_id, transcript=text)
         if cfg.webhook_when == "transcript":
-            _fire_webhook(repo, meeting_id, cfg, progress)
+            fire_webhook(repo, meeting_id, cfg, progress)
         _summarise(repo, meeting_id, cfg, m, text, summarize, progress)
     except Exception as e:
         repo.update(meeting_id, status="Error", error=str(e))

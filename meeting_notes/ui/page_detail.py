@@ -732,6 +732,7 @@ class DetailPage(QWidget):
         browser = QTextBrowser()
         browser.setReadOnly(True)
         browser.setOpenExternalLinks(False)
+        browser.setOpenLinks(False)  # model output: never navigate, not even file:// into the pane
         browser.document().setMarkdown(text)
         v.addWidget(browser)
         bar = QHBoxLayout()
@@ -861,7 +862,12 @@ class DetailPage(QWidget):
                 extra_instructions=cfg.notes_instructions(m.template),
             )
             repo.update(mid, title=notes.title, notes_json=notes.model_dump_json(),
-                        attendees=notes.attendees or m.attendees, status="Done")
+                        attendees=notes.attendees or m.attendees, status="Done", error=None)
+            if cfg.webhook_when == "summary":
+                # a failed first summary doesn't fire the webhook; the successful
+                # retry is the moment "after the AI summary is done" actually happens
+                from ..pipeline.processing import fire_webhook
+                fire_webhook(repo, mid, cfg, progress)
             return mid
 
         self._run(job, "Re-summarising")
@@ -883,27 +889,21 @@ class DetailPage(QWidget):
             return
         if QMessageBox.question(self, "Delete meeting", "Delete this meeting and its record?") \
                 == QMessageBox.StandardButton.Yes:
-            m = self.repo.get(self.meeting_id)
-            if m.audio_dir and os.path.isdir(m.audio_dir) and self._is_recording_folder(m.audio_dir):
-                import shutil
-                shutil.rmtree(m.audio_dir, ignore_errors=True)  # audio + screenshots
-            self.repo.delete(self.meeting_id)
+            from ..storage.deletion import delete_meeting
+            result = delete_meeting(self.repo, self.meeting_id)
+            if not result.ok:
+                # keep the meeting: reporting success while audio stays on disk
+                # would orphan sensitive files the UI no longer knows about
+                QMessageBox.warning(
+                    self, "Couldn't delete the recording files",
+                    "The meeting was kept because its files could not be deleted:\n"
+                    f"{result.error}\n\nFolder: {result.folder}\n\n"
+                    "Close anything using those files (a player, Explorer preview) "
+                    "and try again.")
+                return
             self.meeting_id = None  # avoid a stale-id KeyError on later refresh()
             self.shell.notify_data_changed()
             self.shell.show_home()
-
-    @staticmethod
-    def _is_recording_folder(path: str) -> bool:
-        """Guard rmtree/startfile: only ever touch a per-meeting folder that
-        actually lives under the recordings root (defends against a tampered or
-        mis-set audio_dir turning Delete into arbitrary recursive deletion)."""
-        from ..paths import recordings_dir
-        try:
-            p = Path(path).resolve()
-            root = recordings_dir().resolve()
-            return root in p.parents and p.name.startswith("meeting_")
-        except OSError:
-            return False
 
     def _open_folder(self) -> None:
         if self.meeting_id is None:
@@ -931,11 +931,16 @@ class DetailPage(QWidget):
             from ..integrations import todoist
             m = repo.get(mid)
             notes = m.notes or {}
-            sent, skipped = todoist.send_open_items(
-                cfg.todoist_token, notes, meeting_title=m.title or "Untitled",
-                date_text=m.date_text)
-            if sent:  # persist the todoist ids so a second click can't duplicate
-                repo.update(mid, notes_json=json.dumps(notes))
+            try:
+                sent, skipped = todoist.send_open_items(
+                    cfg.todoist_token, notes, meeting_title=m.title or "Untitled",
+                    date_text=m.date_text)
+            finally:
+                # persist the todoist ids EVEN when a mid-batch create failed —
+                # otherwise the ids created before the failure are forgotten and
+                # the next retry duplicates those tasks
+                if notes:
+                    repo.update(mid, notes_json=json.dumps(notes))
             return sent, skipped
 
         def done(result):

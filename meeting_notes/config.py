@@ -181,6 +181,19 @@ class Config:
             cfg.notes_provider = "local"
             cfg.llm_base_url = cls.__dataclass_fields__["llm_base_url"].default
             cfg.llm_model = ""
+        # The Earshot Plus endpoint carries the bearer token, audio, transcripts
+        # and notes: a corrupted or hand-edited config must not be able to route
+        # all of that to an arbitrary plain-HTTP origin. Anything that isn't
+        # HTTPS (or loopback, for development against a local server) falls back
+        # to the production API.
+        from urllib.parse import urlparse
+        try:
+            u = urlparse((cfg.cloud_api_base or "").strip())
+            loopback = (u.hostname or "").lower() in ("localhost", "127.0.0.1", "::1")
+            if u.scheme != "https" and not (u.scheme == "http" and loopback):
+                cfg.cloud_api_base = cls.__dataclass_fields__["cloud_api_base"].default
+        except ValueError:
+            cfg.cloud_api_base = cls.__dataclass_fields__["cloud_api_base"].default
         return cfg
 
     def save(self) -> None:

@@ -34,5 +34,15 @@ Out of scope / known trade-offs (documented deliberately):
 
 ## Supported versions
 
-Only the latest release receives fixes. There is no auto-update yet — watch the
-repository's Releases to hear about security updates.
+Only the latest release receives fixes.
+
+## Automatic updates
+
+Packaged Windows builds (0.32.0 and later) ask the public GitHub Releases API
+on launch whether a newer version exists; no account or meeting data is sent.
+Updating is one click, never silent or unattended. Before anything is executed,
+the updater (0.33.0 and later) requires that the download comes from GitHub
+over HTTPS and that the installer matches the SHA-256 digest published as a
+release asset; a download that fails verification is discarded. Releases
+without a digest asset are never auto-installed. The installer is not yet
+Authenticode-signed; code signing is planned. Dev checkouts never auto-update.

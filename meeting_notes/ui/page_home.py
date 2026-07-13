@@ -281,28 +281,19 @@ class MeetingRow(_ClickableCard):
             self, "Delete meeting", "Delete this meeting and its record?"
         ) != QMessageBox.StandardButton.Yes:
             return
-        m = self.repo.get(self.meeting.id)
-        if m.audio_dir and os.path.isdir(m.audio_dir) and self._is_recording_folder(m.audio_dir):
-            import shutil
-            shutil.rmtree(m.audio_dir, ignore_errors=True)  # audio + screenshots
-        self.repo.delete(self.meeting.id)
+        from ..storage.deletion import delete_meeting
+        result = delete_meeting(self.repo, self.meeting.id)
+        if not result.ok:
+            # keep the meeting: reporting success while audio stays on disk
+            # would orphan sensitive files the UI no longer knows about
+            QMessageBox.warning(
+                self, "Couldn't delete the recording files",
+                "The meeting was kept because its files could not be deleted:\n"
+                f"{result.error}\n\nFolder: {result.folder}\n\n"
+                "Close anything using those files (a player, Explorer preview) "
+                "and try again.")
+            return
         self.shell.notify_data_changed()  # refreshes home (this row's own list) too
-
-    @staticmethod
-    def _is_recording_folder(path: str) -> bool:
-        """Guard rmtree: only ever touch a per-meeting folder that actually
-        lives under the recordings root (same guard as DetailPage._delete —
-        defends against a tampered/mis-set audio_dir turning Delete into
-        arbitrary recursive deletion)."""
-        from pathlib import Path
-
-        from ..paths import recordings_dir
-        try:
-            p = Path(path).resolve()
-            root = recordings_dir().resolve()
-            return root in p.parents and p.name.startswith("meeting_")
-        except OSError:
-            return False
 
 
 class HomePage(QWidget):

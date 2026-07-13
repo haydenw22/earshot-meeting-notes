@@ -16,6 +16,7 @@ extra dependency. The transcript-char budget caps how much gets loaded.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import anthropic
@@ -148,9 +149,30 @@ def _build_context(selected: list, *, budget: int = MAX_CONTEXT_CHARS) -> tuple[
     return blocks, used
 
 
+_TS_TAG = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?\]")  # "[mm:ss]" / "[h:mm:ss]"
+
+
+def _timestamp_for_quote(transcript: str, quote: str) -> str:
+    """The [mm:ss] / [h:mm:ss] tag of the transcript line where the quote first
+    occurs. The model's own timestamp is never displayed: a real quote paired
+    with an invented time reads as verified and is the easiest hallucination to
+    miss. Returns "" when the transcript has no tag before the quote."""
+    i = transcript.lower().find(quote.lower())
+    if i == -1:
+        return ""
+    last = ""
+    for m in _TS_TAG.finditer(transcript):
+        if m.start() > i:
+            break
+        last = m.group(0)
+    return last
+
+
 def _verified_citations(raw_citations, by_id: dict) -> list[dict]:
-    """Keep only citations whose quote genuinely appears (case-insensitively) in
-    that meeting's transcript — this is what stops hallucinated timestamps."""
+    """Keep only citations whose (non-empty) quote genuinely appears
+    (case-insensitively) in that meeting's transcript, and derive the displayed
+    timestamp from where the quote actually sits — this is what stops
+    hallucinated quotes AND hallucinated timestamps."""
     citations = []
     for c in raw_citations or []:
         mid = c.get("meeting_id")
@@ -158,13 +180,15 @@ def _verified_citations(raw_citations, by_id: dict) -> list[dict]:
         if not m:
             continue
         quote = (c.get("quote") or "").strip()
-        if quote and m.transcript and quote.lower() not in m.transcript.lower():
+        if not quote:
+            continue  # nothing to verify -> nothing to trust
+        if not (m.transcript and quote.lower() in m.transcript.lower()):
             continue
         citations.append({
             "meeting_id": mid,
             "title": m.title or "Untitled",
             "date_text": m.date_text,
-            "timestamp": (c.get("timestamp") or "").strip(),
+            "timestamp": _timestamp_for_quote(m.transcript, quote),
             "quote": quote,
         })
     return citations
@@ -213,15 +237,17 @@ def _verified_cloud_citations(raw_citations, used: list) -> list[dict]:
         if not isinstance(c, dict):
             continue
         quote = (c.get("quote") or "").strip()
+        if not quote:
+            continue  # nothing to verify -> nothing to trust
         title = (c.get("meeting_title") or "").strip()
         m = by_title.get(title.lower())
         if m is None:
             # fall back to matching the quote against any sent meeting's transcript
-            m = next((mm for mm in used if quote and mm.transcript
+            m = next((mm for mm in used if mm.transcript
                       and quote.lower() in mm.transcript.lower()), None)
         if m is None:
             continue
-        if quote and m.transcript and quote.lower() not in m.transcript.lower():
+        if not (m.transcript and quote.lower() in m.transcript.lower()):
             continue
         citations.append({
             "meeting_id": m.id,

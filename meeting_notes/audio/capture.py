@@ -37,6 +37,10 @@ class _Stream:
         self.channels = max(1, int(channels))
         self.rate = int(rate)
         self.level = 0.0  # 0..1 RMS for the meter
+        # Latched on the first failed spool write (disk full, folder gone,
+        # permissions). The meter keeps working off the in-memory buffer, so
+        # without this latch a dead spool looks exactly like a healthy recording.
+        self.write_error: Optional[str] = None
         if spool_path is not None:
             spool_path.parent.mkdir(parents=True, exist_ok=True)
             self._path = str(spool_path)
@@ -61,8 +65,9 @@ class _Stream:
     def _cb(self, in_data, frame_count, time_info, status):
         try:
             self._file.write(in_data)  # OS-buffered; fast enough for the audio thread
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as e:
+            if self.write_error is None:  # latch the FIRST failure; UI polls it
+                self.write_error = f"{type(e).__name__}: {e}"
         try:
             arr = np.frombuffer(in_data, dtype=np.int16)
             if arr.size:
@@ -181,6 +186,15 @@ class DualStreamRecorder:
     @property
     def them_level(self) -> float:
         return self._loop.level if self._loop else 0.0
+
+    @property
+    def write_error(self) -> Optional[str]:
+        """First spool-persistence failure on either channel (labelled with the
+        affected side), or None while both files are still accepting writes."""
+        for label, s in (("your microphone", self._mic), ("their audio", self._loop)):
+            if s is not None and s.write_error:
+                return f"{label} ({s.write_error})"
+        return None
 
     def stop(self) -> RecordingSpool:
         if not self._running:

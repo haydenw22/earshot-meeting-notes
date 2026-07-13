@@ -2,6 +2,12 @@
 
 Mirrors cloud_link.py: a QThread does the network work (checking, then
 downloading) so the GUI never blocks, and the dialog owns the worker's lifecycle.
+
+Closing the dialog mid-download is safe: the download is cancelled
+cooperatively (checked between streamed chunks), its signals are disconnected
+so a straggler can never launch the installer after the dialog is gone, and the
+thread is detached + kept alive in _LINGERING until it exits — Qt aborts the
+whole process if a running QThread is destroyed, so we never let that happen.
 """
 from __future__ import annotations
 
@@ -20,6 +26,25 @@ from PySide6.QtWidgets import (
 from .. import __version__, updater
 from ..updater import UpdateInfo
 
+# Cancelled download threads that haven't fully exited yet. Holding a strong
+# reference stops Python GC destroying a live QThread (process abort); shutdown()
+# joins them at app close.
+_LINGERING: set[QThread] = set()
+
+
+def shutdown(timeout_ms: int = 5000) -> None:
+    """Join any cancelled download threads at app close. They touch nothing but
+    their own private temp files, so terminate() is an acceptable last resort
+    here (unlike workers that write the database)."""
+    for w in list(_LINGERING):
+        try:
+            if w.isRunning() and not w.wait(timeout_ms):
+                w.terminate()
+                w.wait(1000)
+        except RuntimeError:
+            pass  # already deleted — fine
+        _LINGERING.discard(w)
+
 
 class _CheckWorker(QThread):
     """Ask GitHub for a newer release; emit it if there is one."""
@@ -37,20 +62,35 @@ class _CheckWorker(QThread):
 
 class _DownloadWorker(QThread):
     progress = Signal(float)   # 0..1
-    done = Signal(str)         # installer path
+    done = Signal(str)         # verified installer path
     failed = Signal(str)
 
-    def __init__(self, url: str, dest: str, parent=None):
+    def __init__(self, url: str, digest_url: str, dest: str, parent=None):
         super().__init__(parent)
         self.url = url
+        self.digest_url = digest_url
         self.dest = dest
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     def run(self) -> None:
         try:
-            path = updater.download_installer(self.url, self.dest,
-                                              progress_cb=self.progress.emit)
+            expected = updater.fetch_expected_sha256(self.digest_url)
+            path = updater.download_installer(
+                self.url, self.dest, progress_cb=self.progress.emit,
+                expected_sha256=expected, cancelled=lambda: self._cancelled)
+        except updater.DownloadCancelled:
+            updater.cleanup_download(self.dest)
+            return
         except Exception as e:  # noqa: BLE001 — surface any failure to the user
-            self.failed.emit(f"Download failed: {e}")
+            updater.cleanup_download(self.dest)
+            if not self._cancelled:
+                self.failed.emit(f"Download failed: {e}")
+            return
+        if self._cancelled:  # finished in the same instant the user closed — don't install
+            updater.cleanup_download(path)
             return
         self.done.emit(path)
 
@@ -112,19 +152,23 @@ class UpdateDialog(QDialog):
 
     def _start(self) -> None:
         self.install_btn.setEnabled(False)
-        self.later_btn.setEnabled(False)
+        self.later_btn.setText("Cancel")  # closing now cancels the download
         self.progress.setVisible(True)
         self.progress.setValue(0)
         self.status.setStyleSheet("")
         self.status.setText("Downloading update…")
-        self.worker = _DownloadWorker(self.info.download_url,
+        self.worker = _DownloadWorker(self.info.download_url, self.info.digest_url,
                                       updater.default_download_path(), self)
-        self.worker.progress.connect(lambda f: self.progress.setValue(int(f * 100)))
+        self.worker.progress.connect(self._on_progress)
         self.worker.done.connect(self._on_done)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
+    def _on_progress(self, f: float) -> None:
+        self.progress.setValue(int(f * 100))
+
     def _on_done(self, path: str) -> None:
+        self.worker = None
         self.status.setText("Starting the installer — Earshot will close and reopen. "
                             "Your recordings and notes are kept.")
         try:
@@ -138,16 +182,35 @@ class UpdateDialog(QDialog):
             app.quit()
 
     def _on_failed(self, msg: str) -> None:
+        self.worker = None
         self.progress.setVisible(False)
         self.status.setStyleSheet(f"color:{self.theme.color('danger')};")
         self.status.setText(msg + "  You can also download it from tryearshot.app.")
         self.install_btn.setEnabled(True)
+        self.later_btn.setText("Later")
         self.later_btn.setEnabled(True)
 
     def _stop_worker(self) -> None:
-        if self.worker is not None:
-            self.worker.wait(3000)
-            self.worker = None
+        w, self.worker = self.worker, None
+        if w is None:
+            return
+        w.cancel()
+        if not w.isRunning():
+            return
+        # Disconnect everything so the straggler can never touch this dialog or
+        # launch the installer, then detach it from the dialog: destroying a
+        # QDialog that still parents a running QThread aborts the process.
+        for sig in (w.progress, w.done, w.failed):
+            try:
+                sig.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+        w.setParent(None)
+        _LINGERING.add(w)
+        w.finished.connect(lambda: _LINGERING.discard(w))
+        # A cancelled download exits within one chunk read; give it a moment but
+        # never block the UI for long — _LINGERING keeps it alive either way.
+        w.wait(250)
 
     def reject(self) -> None:  # noqa: N802 (Qt override)
         self._stop_worker()

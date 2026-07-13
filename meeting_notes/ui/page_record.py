@@ -608,7 +608,9 @@ class RecordPage(QWidget):
         self.bookmark_count.setText("")
         self._mic_seen = False
         self._them_seen = False
+        self._write_error_reported = False
         self.input_warning.setVisible(False)
+        self.apply_theme()  # reset the banner to its amber (input-warning) style
         meeting = self.repo.create(
             date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda,
             template=template, folder_id=folder_id,
@@ -682,7 +684,11 @@ class RecordPage(QWidget):
             self._mic_seen = True
         if them_level > _INPUT_ACTIVE_LEVEL:
             self._them_seen = True
-        self._update_input_warning(self.recorder.elapsed)
+        write_error = self.recorder.write_error
+        if write_error:
+            self._show_write_error(write_error)
+        else:
+            self._update_input_warning(self.recorder.elapsed)
         if self.overlay is not None:
             self.overlay.update_levels(mic_level, them_level)
             self.overlay.update_time(self.recorder.elapsed)
@@ -703,6 +709,30 @@ class RecordPage(QWidget):
                    "device selected under “Their audio”.")
         self.input_warning_text.setText(msg)
         self.input_warning.setVisible(True)
+
+    def _show_write_error(self, write_error: str) -> None:
+        """Persistent danger banner: a spool file stopped accepting writes (disk
+        full, recordings folder disconnected, permissions) while the level meters
+        keep moving off the in-memory buffer. Without this the user only finds
+        out when the recording comes up short. Latched: it never clears while
+        this recording runs, and the failure is stamped on the meeting row."""
+        self.input_warning_icon.setPixmap(icons.pixmap("alert-triangle", self.theme.color("danger"), 18))
+        self.input_warning.setStyleSheet(
+            f"#WarnBanner{{background:{self.theme.color('danger_soft')};"
+            f"border:1px solid {self.theme.color('danger')}; border-radius:10px;}}"
+            f"#WarnText{{color:{self.theme.color('danger')}; font-weight:600; background:transparent;}}"
+        )
+        self.input_warning_text.setText(
+            "Recording problem: Earshot can no longer save audio for "
+            f"{write_error.split(' (')[0]}. Audio up to this point is kept, but new audio "
+            "is being lost. Check free disk space and that the recordings folder is still "
+            "available, then stop and restart the recording."
+        )
+        self.input_warning.setVisible(True)
+        if not self._write_error_reported and self.meeting_id is not None:
+            self._write_error_reported = True
+            self.repo.update(self.meeting_id,
+                             error=f"Recording problem: audio stopped saving for {write_error}")
 
     def _persist_attendees(self) -> None:
         if self.meeting_id is not None:
@@ -735,6 +765,7 @@ class RecordPage(QWidget):
         from ..pipeline.processing import process_recording
 
         def job(progress):
+            write_error = recorder.write_error  # capture before the streams close
             progress("Finalising audio")
             spool = recorder.stop()
             # Streams the spools to WAV block-by-block; the raw spools (the only
@@ -745,6 +776,11 @@ class RecordPage(QWidget):
                 process_recording(repo, mid, cfg, progress=progress, summarize=cfg.auto_summary)
             else:
                 progress("Saved — open the meeting to transcribe it when you're ready")
+            if write_error:
+                # the pipeline clears `error` when transcription starts; re-stamp
+                # so the incomplete-audio warning survives on the meeting row
+                repo.update(mid, error=("Recording problem: audio stopped saving for "
+                                        f"{write_error}. The saved audio may be incomplete."))
             return mid
 
         self.worker = FuncWorker(job)

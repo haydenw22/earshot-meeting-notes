@@ -4,6 +4,27 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.33.0] — 2026-07-13 · Safety release: verified updates, honest failures
+
+### Added
+
+- Updates are now cryptographically verified before they run. Every release publishes a SHA-256 digest next to the installer, and the app refuses to install any download that does not come from GitHub over HTTPS, look like a real Windows installer and match that digest exactly.
+- If Earshot can no longer save audio mid-recording (disk full, recordings folder disconnected, permissions changed), a red banner appears within moments and the problem is recorded on the meeting, instead of the level meters happily bouncing while audio is silently lost.
+
+### Fixed
+
+- Closing the update window during a download now cancels the download cleanly. Previously it kept running invisibly and could still launch the installer (closing the app under you) after you had dismissed it, or crash the app on exit.
+- Deleting a meeting now only removes it from your library once its recording files are verifiably gone. If a file is locked or undeletable, the meeting is kept and Earshot tells you exactly which folder still holds audio, so sensitive recordings can no longer be silently left behind.
+- Sending action items to Todoist no longer duplicates tasks when one item in the batch fails: tasks created before the failure are remembered, so a retry only sends what is missing.
+- Ask Earshot citation timestamps are now read from the transcript line where the quote actually occurs instead of trusting the AI's stated time, and citations with empty quotes are rejected.
+
+### Changed
+
+- The "after AI summary" webhook now fires only when a summary actually exists, including after a successful Re-summarise, and never for a failed one.
+- The temporary 16 kHz upload copies made for transcription are deleted once transcription finishes instead of being kept forever next to the originals, saving disk space on every meeting.
+- The Earshot Plus endpoint setting only accepts HTTPS (or a local development server), so a corrupted config file cannot quietly redirect your account token somewhere else.
+- Links inside AI action results are display-only and no longer clickable.
+
 ## [0.32.2] — 2026-07-10 · The ghost window flash is actually gone
 
 ### Fixed

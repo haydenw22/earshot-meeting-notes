@@ -1035,5 +1035,7 @@ class Shell(QMainWindow):
         uw = getattr(self, "_update_worker", None)  # the startup update-check QThread
         if uw is not None and uw.isRunning():
             uw.wait(3000)
+        from . import update_dialog
+        update_dialog.shutdown()  # join any cancelled installer download too
         workers.join_all()
         event.accept()
