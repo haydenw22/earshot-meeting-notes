@@ -23,7 +23,7 @@ RELEASES: tuple[Release, ...] = (
         (
             ("Added", (
                 "Share now offers two options: save a standalone HTML file (stays on "
-                "this PC, as before), or — with Earshot Plus — create a public link. "
+                "this PC, as before), or, with Earshot Plus, create a public link. "
                 "The link hosts the notes as a branded page on tryearshot.app, "
                 "reachable only by its unguessable URL: it is never listed or indexed "
                 "anywhere, and the dialog is explicit that the notes leave your "
@@ -37,7 +37,7 @@ RELEASES: tuple[Release, ...] = (
                 "after a meeting takes one click instead of one per item.",
             )),
             ("Notes", (
-                "Public links never include unreviewed AI suggestions — only action "
+                "Public links never include unreviewed AI suggestions: only action "
                 "items you kept (or completed) appear on the page. The transcript is "
                 "included only when you tick \"Include the full transcript\".",
                 "Creating public links requires an Earshot Plus subscription and "

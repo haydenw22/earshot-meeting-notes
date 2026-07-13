@@ -1111,7 +1111,7 @@ class DetailPage(QWidget):
         def done(_res) -> None:
             self.share_btn.setEnabled(True)
             self.repo.update(meeting_id, share_url=None)
-            self.status_label.setText("Stopped sharing — the public page is gone.")
+            self.status_label.setText("Stopped sharing. The public page is gone.")
             if self.meeting_id == meeting_id:
                 self.refresh()
 

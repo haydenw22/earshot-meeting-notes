@@ -8,13 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and the proj
 
 ### Added
 
-- Share now offers two options: save a standalone HTML file (stays on this PC, as before), or — with Earshot Plus — create a public link. The link hosts the notes as a branded page on tryearshot.app, reachable only by its unguessable URL: it is never listed or indexed anywhere, and the dialog is explicit that the notes leave your computer and anyone with the link can view them.
+- Share now offers two options: save a standalone HTML file (stays on this PC, as before), or, with Earshot Plus, create a public link. The link hosts the notes as a branded page on tryearshot.app, reachable only by its unguessable URL: it is never listed or indexed anywhere, and the dialog is explicit that the notes leave your computer and anyone with the link can view them.
 - Re-sharing the same meeting updates the page in place and keeps the same link. A shared meeting shows its link in the Share dialog with Copy link, Update and Stop sharing; stopping takes the page down immediately.
 - Action items now have Keep all and Delete all buttons in the section header while AI suggestions are waiting for review, so cleaning up after a meeting takes one click instead of one per item.
 
 ### Notes
 
-- Public links never include unreviewed AI suggestions — only action items you kept (or completed) appear on the page. The transcript is included only when you tick "Include the full transcript".
+- Public links never include unreviewed AI suggestions: only action items you kept (or completed) appear on the page. The transcript is included only when you tick "Include the full transcript".
 - Creating public links requires an Earshot Plus subscription and server release 2026-07-13 or later.
 
 ## [0.33.0] — 2026-07-13 · Safety release: verified updates, honest failures

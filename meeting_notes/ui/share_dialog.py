@@ -70,8 +70,8 @@ class ShareDialog(QDialog):
                                "can view them. The link is unguessable and never listed "
                                "anywhere; you can stop sharing at any time.")
         else:
-            link_note = QLabel("Requires Earshot Plus — hosts the notes as a web page you "
-                               "can share with a link. Sign in from Settings → Account.")
+            link_note = QLabel("Requires Earshot Plus: hosts the notes as a web page you "
+                               "can share with a link. Sign in from Settings, Account.")
         link_note.setObjectName("Faint")
         link_note.setWordWrap(True)
         lay.addWidget(link_note)
