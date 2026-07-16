@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import sys
 import time
 
 from ..audio import devices as dev
@@ -573,7 +574,9 @@ class RecordPage(QWidget):
         ok = bool(mics and loops)
         self.record_btn.setEnabled(ok)
         if not ok:
-            self.status_label.setText("No microphone or loopback device found — check Windows sound settings.")
+            where = "macOS" if sys.platform == "darwin" else "Windows"
+            self.status_label.setText(
+                f"No microphone or system audio source found. Check {where} sound settings.")
 
     @staticmethod
     def _select(combo: QComboBox, saved, devs) -> None:

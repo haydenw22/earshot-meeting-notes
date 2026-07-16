@@ -4,6 +4,21 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] — 2026-07-17 · Earshot comes to the Mac
+
+### Added
+
+- Earshot now runs natively on Apple Silicon Macs (macOS 14.4 or newer). Download Earshot.dmg from the release and drag Earshot to Applications.
+- Both sides of a meeting are captured on the Mac just like on Windows: your microphone plus system audio. System audio uses Apple's own audio tap, so there is no virtual driver to install and no screen recording permission involved. macOS asks once for System Audio Recording permission and once for the microphone.
+- Automatic updates work on the Mac too, with the same protection as Windows: every download is verified against the release's published SHA-256 digest before it is installed, and a failed update can never leave you without a working app.
+- Call detection on the Mac: when a meeting app such as Zoom, Teams, Webex or Slack is on the microphone, Earshot offers to record, just like on Windows.
+
+### Notes
+
+- Your data lives in Library, then Application Support, then Earshot on the Mac. Recordings, notes and settings stay on your computer, same as on Windows.
+- The Mac app is not yet code signed. On first launch macOS may ask you to allow it under System Settings, then Privacy and Security, then Open Anyway.
+- Everything else carries over: transcription providers, AI notes, projects, Ask Earshot, integrations, share links and Earshot Plus.
+
 ## [0.34.0] — 2026-07-13 · Share meetings with a link, faster action-item cleanup
 
 ### Added

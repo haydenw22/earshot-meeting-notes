@@ -6,6 +6,7 @@ to save.
 """
 from __future__ import annotations
 
+import sys
 import webbrowser
 
 from PySide6.QtCore import Qt
@@ -112,12 +113,16 @@ _SECTIONS: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("info", "Troubleshooting", [
         ("A channel shows no audio",
          "Check the two lights on the recording overlay. If the system-audio light "
-         "stays dark, pick the right loopback device in Settings, then Audio."),
+         "stays dark, " + (
+             "make sure Earshot is allowed under System Settings, then Privacy and "
+             "Security, then Screen and System Audio Recording."
+             if sys.platform == "darwin" else
+             "pick the right loopback device in Settings, then Audio.")),
         ("Transcription fails",
          "Use Test connection in Settings, then Transcription. It checks the exact "
          "server and key you've entered without freezing the app."),
         ("Where is my data?",
-         "Everything lives on this PC. Recordings and screenshots are in the "
+         "Everything lives on this computer. Recordings and screenshots are in the "
          "storage folder (Settings, then Account, then Open storage folder); the "
          "database and settings sit in the app's data folder."),
         ("A crash interrupted a recording",

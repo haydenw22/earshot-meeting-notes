@@ -11,6 +11,8 @@ whole process if a running QThread is destroyed, so we never let that happen.
 """
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication,
@@ -169,8 +171,12 @@ class UpdateDialog(QDialog):
 
     def _on_done(self, path: str) -> None:
         self.worker = None
-        self.status.setText("Starting the installer — Earshot will close and reopen. "
-                            "Your recordings and notes are kept.")
+        if sys.platform == "darwin":
+            self.status.setText("Installing the update. Earshot will close and reopen. "
+                                "Your recordings and notes are kept.")
+        else:
+            self.status.setText("Starting the installer. Earshot will close and reopen. "
+                                "Your recordings and notes are kept.")
         try:
             updater.run_installer(path)
         except Exception as e:  # noqa: BLE001

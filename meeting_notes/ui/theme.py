@@ -12,13 +12,20 @@ modes.
 """
 from __future__ import annotations
 
+import sys
 from typing import Literal
 
 Mode = Literal["light", "dark"]
 
-# Windows 11 optical sizes: Text for body copy, Display for large headings.
-FONT_FAMILY = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
-FONT_DISPLAY = '"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif'
+if sys.platform == "darwin":
+    # macOS: the hidden ".AppleSystemUIFont" face resolves to the system
+    # San Francisco font; Helvetica Neue is the safety net.
+    FONT_FAMILY = '".AppleSystemUIFont", "Helvetica Neue", system-ui, sans-serif'
+    FONT_DISPLAY = FONT_FAMILY
+else:
+    # Windows 11 optical sizes: Text for body copy, Display for large headings.
+    FONT_FAMILY = '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif'
+    FONT_DISPLAY = '"Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif'
 
 LIGHT: dict[str, str] = {
     "bg": "#F5F6FA",          # app background

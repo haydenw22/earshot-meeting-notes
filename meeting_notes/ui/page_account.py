@@ -393,9 +393,10 @@ class AccountPage(QWidget):
         import os
 
         from ..paths import recordings_dir
+        from ..util.open_path import open_path
         folder = str(recordings_dir())
         if os.path.isdir(folder):
-            os.startfile(folder)  # noqa: S606
+            open_path(folder)
 
     def _open_url(self, url: str) -> None:
         try:

@@ -33,7 +33,7 @@ def due_label(s: Optional[str], today: Optional[_dt.date] = None) -> str:
         return "Today"
     if delta == 1:
         return "Tomorrow"
-    return d.strftime("%#d %b")  # Windows-only strftime flag (no leading zero)
+    return f"{d.day} {d.strftime('%b')}"  # no leading zero on any platform
 
 
 def due_severity(s: Optional[str], today: Optional[_dt.date] = None) -> str:

@@ -18,9 +18,13 @@ import sys
 REPO_URL = "https://github.com/haydenw22/earshot-meeting-notes"
 
 PREAMBLE = (
-    "**Install:** download `EarshotSetup.exe` below and run it (Windows 10/11, "
-    "64-bit). SmartScreen may warn because the installer is new and unsigned: "
+    "**Install on Windows:** download `EarshotSetup.exe` below and run it (Windows "
+    "10/11, 64-bit). SmartScreen may warn because the installer is new and unsigned: "
     "click **More info**, then **Run anyway**.\n\n"
+    "**Install on macOS:** download `Earshot.dmg` below, open it and drag Earshot to "
+    "Applications (Apple Silicon, macOS 14.4 or newer). Because the app is new and "
+    "unsigned, macOS may block the first launch: open **System Settings > Privacy & "
+    "Security**, scroll down and click **Open Anyway**.\n\n"
     "**Self-host free forever** with your own AI keys (the setup guide walks you "
     "through it), or subscribe to **Earshot Plus** at https://tryearshot.app for "
     "managed transcription and AI with zero setup."

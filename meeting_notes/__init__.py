@@ -1,3 +1,4 @@
-"""Meeting Notes — a local Windows meeting recorder, transcriber and note-taker."""
+"""Meeting Notes — a local meeting recorder, transcriber and note-taker for
+Windows and macOS."""
 
-__version__ = "0.34.0"
+__version__ = "0.35.0"

@@ -2,21 +2,22 @@
 
 On startup the packaged app asks GitHub for the latest release; if it's newer
 than the running version we surface a dialog with the changelog and a
-"Download & install" button. Clicking it downloads EarshotSetup.exe and runs it
-silently to replace the app in place.
+"Download & install" button. On Windows that downloads EarshotSetup.exe and
+runs it silently to replace the app in place; on macOS it downloads
+Earshot-mac.zip, verifies it, and swaps the .app bundle before relaunching.
 
 Downloads are verified before anything is executed: the release must ship a
-SHA-256 digest asset (EarshotSetup.exe.sha256, produced by the release
-workflow), the download must stay on official GitHub hosts over HTTPS, look
-like a Windows executable, stay under a sanity size cap, and hash to exactly
-the published digest. A release without a digest asset is treated as not
+SHA-256 digest asset (produced by the release workflow), the download must
+stay on official GitHub hosts over HTTPS, look like the right kind of payload
+for this platform, stay under a sanity size cap, and hash to exactly the
+published digest. A release without a digest asset is treated as not
 installable. Each download goes into its own freshly created private temp
 directory, never a predictable shared path.
 
-The meeting database is NEVER touched by an update: the installer only writes to
-%LOCALAPPDATA%\\Programs\\Earshot (the program files), while recordings and the
-database live under %LOCALAPPDATA%\\Earshot (the data dir). Overwriting one
-leaves the other alone.
+The meeting database is NEVER touched by an update: only the program files
+(%LOCALAPPDATA%\\Programs\\Earshot on Windows, the Earshot.app bundle on
+macOS) are replaced, while recordings and the database live in the separate
+app-data dir. Overwriting one leaves the other alone.
 
 Everything here fails soft — a missing network, a GitHub hiccup or an unexpected
 payload just means "no update this launch", never a crash.
@@ -34,8 +35,18 @@ import httpx
 
 REPO_SLUG = "haydenw22/earshot-meeting-notes"
 _RELEASES_URL = f"https://api.github.com/repos/{REPO_SLUG}/releases"
-ASSET_NAME = "EarshotSetup.exe"
-ASSET_DIGEST_NAME = ASSET_NAME + ".sha256"
+
+
+def _platform_assets(platform: str = sys.platform) -> tuple[str, str, bytes, str]:
+    """(asset_name, digest_name, payload_magic, magic_error) per platform."""
+    if platform == "darwin":
+        return ("Earshot-mac.zip", "Earshot-mac.zip.sha256", b"PK\x03\x04",
+                "update blocked: response is not a macOS app archive")
+    return ("EarshotSetup.exe", "EarshotSetup.exe.sha256", b"MZ",
+            "update blocked: response is not a Windows installer")
+
+
+ASSET_NAME, ASSET_DIGEST_NAME, _MAGIC, _MAGIC_ERR = _platform_assets()
 _UA = "Earshot-Updater"
 _TMP_PREFIX = "EarshotUpdate-"
 
@@ -56,9 +67,9 @@ class UpdateInfo:
 
 
 def is_supported() -> bool:
-    """Auto-update only applies to the packaged Windows build (a dev checkout has
-    no installer to run, and shouldn't be nagged)."""
-    return bool(getattr(sys, "frozen", False)) and sys.platform == "win32"
+    """Auto-update only applies to packaged builds (a dev checkout has no
+    installer to run, and shouldn't be nagged)."""
+    return bool(getattr(sys, "frozen", False)) and sys.platform in ("win32", "darwin")
 
 
 def parse_version(s: str) -> tuple[int, ...]:
@@ -263,8 +274,8 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
                     if cancelled is not None and cancelled():
                         raise DownloadCancelled()
                     if first_bytes and data:
-                        if not data.startswith(b"MZ"):  # PE executable magic
-                            raise ValueError("update blocked: response is not a Windows installer")
+                        if not data.startswith(_MAGIC):  # PE / zip payload magic
+                            raise ValueError(_MAGIC_ERR)
                         first_bytes = False
                     f.write(data)
                     digest.update(data)
@@ -288,13 +299,84 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
 
 
 def run_installer(installer_path: str) -> None:
-    """Launch the downloaded installer silently and DETACHED so it outlives this
-    process and can replace it. /SILENT shows a progress window but no wizard;
-    the installer closes Earshot, installs, then relaunches it. The caller must
-    quit the app immediately after so no files stay locked."""
+    """Kick off the platform's install step, detached so it outlives this
+    process and can replace it. The caller must quit the app immediately after
+    so no files stay locked.
+
+    Windows: run the Inno installer with /SILENT (progress window, no wizard);
+    it closes Earshot, installs, then relaunches it. macOS: extract the
+    verified zip and hand over to a detached swap script (see
+    _install_mac_update)."""
+    if sys.platform == "darwin":
+        _install_mac_update(installer_path)
+        return
     creationflags = 0
     if sys.platform == "win32":
         creationflags = (getattr(subprocess, "DETACHED_PROCESS", 0)
                          | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     subprocess.Popen([installer_path, "/SILENT"], close_fds=True,
                      creationflags=creationflags)
+
+
+# --------------------------------------------------------------- macOS ----
+
+def _running_app_bundle(executable: str | None = None) -> str | None:
+    """Path of the .app bundle the running executable lives in, or None when
+    not inside one (dev checkout). Walks up from Contents/MacOS/Earshot."""
+    path = os.path.abspath(executable or sys.executable)
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        if path.endswith(".app"):
+            return path
+        path = parent
+
+
+def _compose_install_script(pid: int, new_app: str, dest_app: str, workdir: str) -> str:
+    """The shell script that performs the swap AFTER the app quits.
+
+    Safety property: the old app is moved aside (not deleted) before the new
+    one moves in, and restored if that move fails — a botched update can never
+    leave the user with no app. The quarantine strip lets an unsigned update
+    relaunch without Gatekeeper re-blocking it; on a notarized build it is a
+    harmless no-op."""
+    q = lambda s: "'" + str(s).replace("'", "'\\''") + "'"  # noqa: E731
+    old = dest_app + ".old"
+    return f"""#!/bin/sh
+# Earshot update swap script (auto-generated; deletes itself and its workdir)
+while /bin/kill -0 {int(pid)} 2>/dev/null; do sleep 0.3; done
+rm -rf {q(old)}
+mv {q(dest_app)} {q(old)} || exit 1
+if mv {q(new_app)} {q(dest_app)}; then
+    rm -rf {q(old)}
+else
+    /usr/bin/ditto {q(new_app)} {q(dest_app)} || {{ rm -rf {q(dest_app)}; mv {q(old)} {q(dest_app)}; exit 1; }}
+    rm -rf {q(old)}
+fi
+/usr/bin/xattr -dr com.apple.quarantine {q(dest_app)} 2>/dev/null || true
+/usr/bin/open {q(dest_app)}
+rm -rf {q(workdir)}
+"""
+
+
+def _install_mac_update(zip_path: str) -> None:
+    """Extract the verified zip and launch the detached swap script. Raises if
+    the archive doesn't contain a launchable Earshot.app or we're not running
+    from inside a bundle; the caller shows the error and the app keeps running
+    on the current version."""
+    workdir = tempfile.mkdtemp(prefix=_TMP_PREFIX)
+    subprocess.run(["/usr/bin/ditto", "-x", "-k", zip_path, workdir], check=True,
+                   capture_output=True)
+    new_app = os.path.join(workdir, "Earshot.app")
+    main_exe = os.path.join(new_app, "Contents", "MacOS", "Earshot")
+    if not (os.path.isfile(main_exe) and os.access(main_exe, os.X_OK)):
+        raise ValueError("update blocked: archive does not contain a launchable Earshot.app")
+    dest_app = _running_app_bundle()
+    if not dest_app:
+        raise RuntimeError("not running from an installed Earshot.app; cannot self-update")
+    script = os.path.join(workdir, "install.sh")
+    with open(script, "w", encoding="utf-8") as f:
+        f.write(_compose_install_script(os.getpid(), new_app, dest_app, workdir))
+    os.chmod(script, 0o700)
+    subprocess.Popen(["/bin/sh", script], close_fds=True, start_new_session=True)

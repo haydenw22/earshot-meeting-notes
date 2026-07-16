@@ -15,15 +15,16 @@ from .ui.theme_controller import ThemeController
 
 
 def _app_icon() -> QIcon:
-    """Prefer the multi-resolution .ico (crisp at small taskbar sizes); fall back
-    to the rendered SVG mark when it isn't on disk."""
+    """Prefer the multi-resolution icon file (crisp at small taskbar/dock sizes);
+    fall back to the rendered SVG mark when it isn't on disk."""
+    names = ("earshot.icns", "earshot.ico") if sys.platform == "darwin" else ("earshot.ico",)
     candidates = []
     base = getattr(sys, "_MEIPASS", None)  # PyInstaller bundle dir
-    if base:
-        candidates.append(os.path.join(base, "earshot.ico"))
-    candidates.append(
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging", "earshot.ico")
-    )
+    pkg_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging")
+    for name in names:
+        if base:
+            candidates.append(os.path.join(base, name))
+        candidates.append(os.path.join(pkg_dir, name))
     for path in candidates:
         if os.path.exists(path):
             return QIcon(path)
@@ -73,7 +74,9 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Earshot")
     app.setOrganizationName("Whittle")
-    app.setFont(QFont("Segoe UI", 10))
+    if sys.platform == "win32":
+        app.setFont(QFont("Segoe UI", 10))
+    # macOS: keep Qt's default (the system San Francisco font at native size)
 
     icon = _app_icon()
     app.setWindowIcon(icon)

@@ -303,21 +303,26 @@ def main() -> int:
     from meeting_notes.transcription import earshot_client as ec
 
     # Sign-out clears local state SYNCHRONOUSLY and revokes off-thread, so it
-    # never blocks the GUI. Point the base at a closed local port so the
-    # background revoke fails fast (connection refused) instead of touching the
-    # real server, then wait for that worker to finish so no thread leaks.
+    # never blocks the GUI. Stub the revoke call so the worker resolves
+    # instantly and offline (a refused localhost connect can take seconds on
+    # macOS, which outlived the wait below), then wait so no thread leaks.
     acfg.account_mode = "cloud"
     acfg.cloud_token = "tok"
     acfg.cloud_email = "hayden@example.com"
-    acfg.cloud_api_base = "http://127.0.0.1:9"  # unreachable — revoke fails fast
-    apage._sign_out()
-    check("sign-out clears cloud_token immediately", acfg.cloud_token == "")
-    check("sign-out returns to selfhost mode", acfg.account_mode == "selfhost")
-    check("sign-out re-renders the selfhost pitch", hasattr(apage, "subscribe_btn"))
-    rw = getattr(apage, "_revoke_worker", None)
-    if rw is not None:
-        rw.wait(4000)  # let the best-effort revoke finish (never raises)
-    check("revoke ran off the GUI thread", rw is not None)
+    acfg.cloud_api_base = "http://127.0.0.1:9"  # never used: revoke is stubbed
+    orig_revoke = ec.revoke
+    ec.revoke = lambda base, token, **k: None
+    try:
+        apage._sign_out()
+        check("sign-out clears cloud_token immediately", acfg.cloud_token == "")
+        check("sign-out returns to selfhost mode", acfg.account_mode == "selfhost")
+        check("sign-out re-renders the selfhost pitch", hasattr(apage, "subscribe_btn"))
+        rw = getattr(apage, "_revoke_worker", None)
+        if rw is not None:
+            rw.wait(4000)  # let the best-effort revoke finish (never raises)
+        check("revoke ran off the GUI thread", rw is not None)
+    finally:
+        ec.revoke = orig_revoke
     acc_repo.close()
 
     # ---------------------------------------------------------------
