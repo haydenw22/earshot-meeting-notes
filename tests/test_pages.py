@@ -116,25 +116,41 @@ def main() -> int:
 
     print("== shell: clicking Help actually opens the menu (v0.29.1 regression) ==")
     # clicked(bool) passes False into the anchor param — this used to raise
-    # inside the slot (False.mapToGlobal) and the menu silently never appeared
-    shell.help_btn.click()
-    app.processEvents()
-    menu = getattr(shell, "_help_menu", None)
-    check("help menu exists after clicking the button", menu is not None)
-    check("help menu is visible", menu is not None and not menu.isHidden())
-    texts = [a.text() for a in menu.actions() if a.text()]
-    for entry in ("Help Center", "What's new", "Visit tryearshot.app", "Report an issue"):
-        check(f"help menu lists '{entry}'", entry in texts)
-    menu.close()
-    app.processEvents()
+    # inside the slot (False.mapToGlobal) and the menu silently never appeared.
+    # The guard is that the slot reaches popup() without raising: actual on-
+    # screen visibility depends on an active window session (absent on CI
+    # runners and locked desktops), so it is NOT asserted.
+    from PySide6.QtWidgets import QMenu as _QMenu
+    popped: list = []
+    _orig_popup = _QMenu.popup
 
-    # the collapsed rail's Help button anchors to itself and must work too
-    shell.rail_help_btn.click()
-    app.processEvents()
-    menu2 = getattr(shell, "_help_menu", None)
-    check("rail help button opens the menu too", menu2 is not None and not menu2.isHidden())
-    menu2.close()
-    app.processEvents()
+    def _spy_popup(self, *a, **k):
+        popped.append(True)
+        return _orig_popup(self, *a, **k)
+
+    _QMenu.popup = _spy_popup
+    try:
+        shell.help_btn.click()
+        app.processEvents()
+        menu = getattr(shell, "_help_menu", None)
+        check("help menu exists after clicking the button", menu is not None)
+        check("help slot reached popup() without raising", bool(popped))
+        texts = [a.text() for a in menu.actions() if a.text()]
+        for entry in ("Help Center", "What's new", "Visit tryearshot.app", "Report an issue"):
+            check(f"help menu lists '{entry}'", entry in texts)
+        menu.close()
+        app.processEvents()
+
+        # the collapsed rail's Help button anchors to itself and must work too
+        popped.clear()
+        shell.rail_help_btn.click()
+        app.processEvents()
+        menu2 = getattr(shell, "_help_menu", None)
+        check("rail help button opens the menu too", menu2 is not None and bool(popped))
+        menu2.close()
+        app.processEvents()
+    finally:
+        _QMenu.popup = _orig_popup
 
     print("== shell: sidebar collapses to the icon rail and back, persisted to cfg ==")
     check("sidebar starts visible", not shell.sidebar.isHidden())
