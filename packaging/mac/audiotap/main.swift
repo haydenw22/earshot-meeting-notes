@@ -18,8 +18,9 @@
 //
 // Diagnostics go to stderr; the parent captures them to audiotap.log.
 
-import AVFAudio
+import AVFoundation
 import CoreAudio
+import Darwin
 import Foundation
 
 // MARK: - Fixed output format
@@ -50,6 +51,7 @@ func fail(_ code: String, _ message: String) -> Never {
 // MARK: - Arguments
 
 var outPath: String? = nil
+var requestMicrophone = false
 var args = Array(CommandLine.arguments.dropFirst())
 while !args.isEmpty {
     let a = args.removeFirst()
@@ -57,8 +59,39 @@ while !args.isEmpty {
     case "--out":
         guard !args.isEmpty else { fail("args", "--out requires a path") }
         outPath = args.removeFirst()
+    case "--request-microphone":
+        requestMicrophone = true
     default:
         fail("args", "unknown argument: \(a)")
+    }
+}
+
+if requestMicrophone {
+    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    switch status {
+    case .authorized:
+        emit(["event": "permission", "kind": "microphone", "granted": true])
+        exit(0)
+    case .denied, .restricted:
+        emit(["event": "permission", "kind": "microphone", "granted": false])
+        exit(2)
+    case .notDetermined:
+        let finished = DispatchSemaphore(value: 0)
+        var granted = false
+        AVCaptureDevice.requestAccess(for: .audio) { allowed in
+            granted = allowed
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + .seconds(120)) == .timedOut {
+            emit(["event": "permission", "kind": "microphone", "granted": false,
+                  "message": "microphone permission request timed out"])
+            exit(3)
+        }
+        emit(["event": "permission", "kind": "microphone", "granted": granted])
+        exit(granted ? 0 : 2)
+    @unknown default:
+        emit(["event": "permission", "kind": "microphone", "granted": false])
+        exit(2)
     }
 }
 guard let spoolPath = outPath else { fail("args", "--out <path> is required") }
@@ -139,41 +172,11 @@ if aggStatus != noErr || aggregateID == kAudioObjectUnknown {
 }
 log("aggregate device created: \(aggregateID)")
 
-// MARK: - Converter to the fixed on-disk format
+// MARK: - Fixed output format
 
 guard let outputFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: OUT_RATE,
                                        channels: OUT_CHANNELS, interleaved: true) else {
     fail("tap_failed", "could not build the output format")
-}
-
-final class ConverterBox {
-    var inputFormat: AVAudioFormat
-    var converter: AVAudioConverter
-    let lock = NSLock()
-
-    init?(asbd: AudioStreamBasicDescription, output: AVAudioFormat) {
-        var asbd = asbd
-        guard let inFmt = AVAudioFormat(streamDescription: &asbd),
-              let conv = AVAudioConverter(from: inFmt, to: output) else { return nil }
-        self.inputFormat = inFmt
-        self.converter = conv
-    }
-
-    func rebuild(asbd: AudioStreamBasicDescription, output: AVAudioFormat) {
-        var asbd = asbd
-        guard let inFmt = AVAudioFormat(streamDescription: &asbd),
-              let conv = AVAudioConverter(from: inFmt, to: output) else { return }
-        lock.lock()
-        inputFormat = inFmt
-        converter = conv
-        lock.unlock()
-    }
-}
-
-guard let box = ConverterBox(asbd: inputASBD, output: outputFormat) else {
-    AudioHardwareDestroyAggregateDevice(aggregateID)
-    AudioHardwareDestroyProcessTap(tapID)
-    fail("tap_failed", "could not build a converter for the tap format")
 }
 
 // MARK: - Shared state
@@ -183,73 +186,246 @@ final class CaptureState {
     var peakRMS: Double = 0
     var framesWritten: UInt64 = 0
     var ioError: String? = nil
+    var ioFailures: UInt64 = 0
     var nonzeroSeen = false
     var silenceHintLogged = false
 }
 let state = CaptureState()
 
-// MARK: - IOProc: convert + spool every tap buffer
+/// Every capture hiccup goes through here: counted (so level events can show
+/// the parent when failures STOP happening and it can clear its warning),
+/// latched for the next error event, and logged to stderr so audiotap.log
+/// tells the whole story after the fact.
+func reportIO(_ message: String) {
+    state.lock.lock()
+    state.ioFailures += 1
+    let count = state.ioFailures
+    if state.ioError == nil { state.ioError = message }
+    state.lock.unlock()
+    log("io failure #\(count): \(message)")
+}
+
+// MARK: - Real-time-safe input queue
+
+private let QUEUE_SLOTS = 64
+private let SLOT_BYTES = 512 * 1024
+private let MAX_AUDIO_BUFFERS = 16
+
+final class RawSlot {
+    let storage = UnsafeMutableRawPointer.allocate(
+        byteCount: SLOT_BYTES, alignment: MemoryLayout<UInt64>.alignment)
+    var used = 0
+    var frameCount: UInt32 = 0
+    var format = AudioStreamBasicDescription()
+    var bufferCount = 0
+    var offsets = [Int](repeating: 0, count: MAX_AUDIO_BUFFERS)
+    var sizes = [Int](repeating: 0, count: MAX_AUDIO_BUFFERS)
+
+    deinit { storage.deallocate() }
+}
+
+struct CapturedBlock {
+    let frameCount: UInt32
+    let format: AudioStreamBasicDescription
+    let buffers: [Data]
+}
+
+final class RawRing {
+    private let lock = NSLock()
+    private let available = DispatchSemaphore(value: 0)
+    private let slots = (0..<QUEUE_SLOTS).map { _ in RawSlot() }
+    private var writeIndex = 0
+    private var readIndex = 0
+    private var count = 0
+    private var currentFormat: AudioStreamBasicDescription
+    var dropped: Int32 = 0
+
+    init(format: AudioStreamBasicDescription) { currentFormat = format }
+
+    func updateFormat(_ format: AudioStreamBasicDescription) {
+        lock.lock()
+        currentFormat = format
+        lock.unlock()
+    }
+
+    func enqueue(_ input: UnsafePointer<AudioBufferList>) {
+        // Never wait from Core Audio's IOProc. Contention/full queue means an
+        // explicit dropped-buffer error rather than risking the audio thread.
+        guard lock.try() else {
+            OSAtomicIncrement32Barrier(&dropped)
+            return
+        }
+        defer { lock.unlock() }
+        if count == slots.count {
+            OSAtomicIncrement32Barrier(&dropped)
+            return
+        }
+        let source = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: input))
+        if source.count > MAX_AUDIO_BUFFERS {
+            OSAtomicIncrement32Barrier(&dropped)
+            return
+        }
+        let slot = slots[writeIndex]
+        var offset = 0
+        for (index, buffer) in source.enumerated() {
+            let size = Int(buffer.mDataByteSize)
+            guard let data = buffer.mData, offset + size <= SLOT_BYTES else {
+                OSAtomicIncrement32Barrier(&dropped)
+                return
+            }
+            slot.storage.advanced(by: offset).copyMemory(from: data, byteCount: size)
+            slot.offsets[index] = offset
+            slot.sizes[index] = size
+            offset += size
+        }
+        slot.used = offset
+        slot.frameCount = source.first.map { currentFormat.mBytesPerFrame > 0
+            ? $0.mDataByteSize / currentFormat.mBytesPerFrame : 0 } ?? 0
+        slot.format = currentFormat
+        slot.bufferCount = source.count
+        writeIndex = (writeIndex + 1) % slots.count
+        count += 1
+        available.signal()
+    }
+
+    func dequeue(timeout: DispatchTime) -> CapturedBlock? {
+        guard available.wait(timeout: timeout) == .success else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        guard count > 0 else { return nil }
+        let slot = slots[readIndex]
+        var copied: [Data] = []
+        copied.reserveCapacity(slot.bufferCount)
+        for index in 0..<slot.bufferCount {
+            copied.append(Data(
+                bytes: slot.storage.advanced(by: slot.offsets[index]),
+                count: slot.sizes[index]))
+        }
+        let block = CapturedBlock(
+            frameCount: slot.frameCount, format: slot.format, buffers: copied)
+        readIndex = (readIndex + 1) % slots.count
+        count -= 1
+        return block
+    }
+
+    var hasPending: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return count > 0
+    }
+
+    func wake() { available.signal() }
+}
+
+let ring = RawRing(format: inputASBD)
+var workerShouldStop: Int32 = 0
+let workerGroup = DispatchGroup()
+let workerQueue = DispatchQueue(label: "audiotap.writer", qos: .userInteractive)
+
+func sameFormat(_ a: AudioStreamBasicDescription,
+                _ b: AudioStreamBasicDescription) -> Bool {
+    return a.mSampleRate == b.mSampleRate &&
+        a.mFormatID == b.mFormatID &&
+        a.mFormatFlags == b.mFormatFlags &&
+        a.mBytesPerPacket == b.mBytesPerPacket &&
+        a.mFramesPerPacket == b.mFramesPerPacket &&
+        a.mBytesPerFrame == b.mBytesPerFrame &&
+        a.mChannelsPerFrame == b.mChannelsPerFrame &&
+        a.mBitsPerChannel == b.mBitsPerChannel
+}
+
+workerGroup.enter()
+workerQueue.async {
+    var activeASBD = AudioStreamBasicDescription()
+    var inputFormat: AVAudioFormat? = nil
+    var converter: AVAudioConverter? = nil
+    while OSAtomicAdd32Barrier(0, &workerShouldStop) == 0 || ring.hasPending {
+        guard let block = ring.dequeue(timeout: .now() + .milliseconds(100)) else { continue }
+        if inputFormat == nil || !sameFormat(activeASBD, block.format) {
+            var format = block.format
+            inputFormat = AVAudioFormat(streamDescription: &format)
+            converter = inputFormat.flatMap { AVAudioConverter(from: $0, to: outputFormat) }
+            activeASBD = block.format
+        }
+        guard let inFormat = inputFormat, let activeConverter = converter,
+              let inputBuffer = AVAudioPCMBuffer(
+                pcmFormat: inFormat, frameCapacity: AVAudioFrameCount(block.frameCount)) else {
+            reportIO("could not build an input audio buffer")
+            continue
+        }
+        inputBuffer.frameLength = AVAudioFrameCount(block.frameCount)
+        let destination = UnsafeMutableAudioBufferListPointer(inputBuffer.mutableAudioBufferList)
+        guard destination.count == block.buffers.count else {
+            reportIO("tap buffer layout changed unexpectedly")
+            continue
+        }
+        var layoutOK = true
+        for index in 0..<destination.count {
+            let data = block.buffers[index]
+            guard let target = destination[index].mData,
+                  data.count <= Int(destination[index].mDataByteSize) else {
+                layoutOK = false
+                break
+            }
+            data.copyBytes(to: target.assumingMemoryBound(to: UInt8.self), count: data.count)
+            destination[index].mDataByteSize = UInt32(data.count)
+        }
+        if !layoutOK {
+            reportIO("tap input exceeded the conversion buffer")
+            continue
+        }
+
+        let ratio = OUT_RATE / inFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio) + 64
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: outputFormat, frameCapacity: capacity) else { continue }
+        var fed = false
+        var convError: NSError? = nil
+        let conversionStatus = activeConverter.convert(
+            to: outputBuffer, error: &convError) { _, outStatus in
+            if fed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            fed = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+        if conversionStatus == .error {
+            reportIO("audio conversion failed: \(convError?.localizedDescription ?? "unknown error")")
+            continue
+        }
+        let frames = Int(outputBuffer.frameLength)
+        guard frames > 0, let samples = outputBuffer.int16ChannelData?[0] else { continue }
+        let sampleCount = frames * Int(OUT_CHANNELS)
+        var acc: Double = 0
+        for index in 0..<sampleCount {
+            let value = Double(samples[index]) / 32768.0
+            acc += value * value
+        }
+        let rms = (acc / Double(sampleCount)).squareRoot()
+        let data = Data(bytes: samples, count: sampleCount * MemoryLayout<Int16>.size)
+        do {
+            try spoolFile.write(contentsOf: data)
+            state.lock.lock()
+            if rms > state.peakRMS { state.peakRMS = rms }
+            if rms > 0 { state.nonzeroSeen = true }
+            state.framesWritten += UInt64(frames)
+            state.lock.unlock()
+        } catch {
+            reportIO("spool write failed: \(error.localizedDescription)")
+        }
+    }
+    workerGroup.leave()
+}
+
+// MARK: - IOProc: copy each tap buffer into the bounded queue
 
 var ioProcID: AudioDeviceIOProcID? = nil
 
 let ioBlock: AudioDeviceIOBlock = { _, inInputData, _, _, _ in
-    box.lock.lock()
-    let converter = box.converter
-    let inputFormat = box.inputFormat
-    box.lock.unlock()
-
-    guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat,
-                                             bufferListNoCopy: inInputData,
-                                             deallocator: nil),
-          inputBuffer.frameLength > 0 else { return }
-
-    let ratio = OUT_RATE / inputFormat.sampleRate
-    let capacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio) + 64
-    guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return }
-
-    var fed = false
-    var convError: NSError? = nil
-    let status = converter.convert(to: outputBuffer, error: &convError) { _, outStatus in
-        if fed {
-            outStatus.pointee = .noDataNow
-            return nil
-        }
-        fed = true
-        outStatus.pointee = .haveData
-        return inputBuffer
-    }
-    if status == .error {
-        log("convert error: \(convError?.localizedDescription ?? "?")")
-        return
-    }
-    let frames = Int(outputBuffer.frameLength)
-    guard frames > 0, let samples = outputBuffer.int16ChannelData?[0] else { return }
-    let sampleCount = frames * Int(OUT_CHANNELS)
-
-    // RMS on the converted int16 (0..1)
-    var acc: Double = 0
-    for i in 0..<sampleCount {
-        let v = Double(samples[i]) / 32768.0
-        acc += v * v
-    }
-    let rms = (sampleCount > 0) ? (acc / Double(sampleCount)).squareRoot() : 0
-
-    let data = Data(bytes: samples, count: sampleCount * MemoryLayout<Int16>.size)
-    state.lock.lock()
-    if rms > state.peakRMS { state.peakRMS = rms }
-    if rms > 0 { state.nonzeroSeen = true }
-    state.lock.unlock()
-    do {
-        try spoolFile.write(contentsOf: data)
-        state.lock.lock()
-        state.framesWritten += UInt64(frames)
-        state.lock.unlock()
-    } catch {
-        state.lock.lock()
-        let already = state.ioError != nil
-        if !already { state.ioError = "spool write failed: \(error.localizedDescription)" }
-        state.lock.unlock()
-    }
+    ring.enqueue(inInputData)
 }
 
 let procStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil, ioBlock)
@@ -267,7 +443,8 @@ if startStatus != noErr {
     fail("tap_failed", "could not start the aggregate device (status \(fourCC(startStatus)))")
 }
 log("capture started")
-emit(["event": "start", "rate": Int(OUT_RATE), "channels": Int(OUT_CHANNELS), "format": "int16"])
+emit(["event": "start", "rate": Int(OUT_RATE), "channels": Int(OUT_CHANNELS),
+      "format": "int16", "started_uptime": ProcessInfo.processInfo.systemUptime])
 
 // MARK: - Tap format changes (output device switched): rebuild the converter
 
@@ -278,8 +455,8 @@ var formatAddress = AudioObjectPropertyAddress(
 let listenerQueue = DispatchQueue(label: "audiotap.listener")
 AudioObjectAddPropertyListenerBlock(tapID, &formatAddress, listenerQueue) { _, _ in
     if let asbd = tapFormat(of: tapID) {
-        log("tap format changed: \(asbd.mSampleRate) Hz, \(asbd.mChannelsPerFrame) ch; rebuilding converter")
-        box.rebuild(asbd: asbd, output: outputFormat)
+        log("tap format changed: \(asbd.mSampleRate) Hz, \(asbd.mChannelsPerFrame) ch")
+        ring.updateFormat(asbd)
     }
 }
 
@@ -290,6 +467,9 @@ func cleanupAndExit(_ code: Int32) {
     if cleanedUp { exit(code) }
     cleanedUp = true
     AudioDeviceStop(aggregateID, ioProcID)
+    OSAtomicIncrement32Barrier(&workerShouldStop)
+    ring.wake()
+    _ = workerGroup.wait(timeout: .now() + .seconds(5))
     if let p = ioProcID { AudioDeviceDestroyIOProcID(aggregateID, p) }
     AudioHardwareDestroyAggregateDevice(aggregateID)
     AudioHardwareDestroyProcessTap(tapID)
@@ -336,10 +516,26 @@ levelTimer.setEventHandler {
     let ioError = state.ioError
     state.ioError = nil
     state.lock.unlock()
+    let dropped = OSAtomicAdd32Barrier(0, &ring.dropped)
+    if dropped > 0 {
+        _ = OSAtomicAdd32Barrier(-dropped, &ring.dropped)
+        // Counted + stderr-logged like any other hiccup so the parent can tell
+        // a transient stall (failures stop growing) from an ongoing problem.
+        reportIO("system audio callback dropped \(dropped) buffers")
+        emit(["event": "error", "code": "overflow",
+              "message": "system audio callback dropped \(dropped) buffers"])
+    }
     if let msg = ioError {
         emit(["event": "error", "code": "io", "message": msg])
     }
-    emit(["event": "level", "rms": (rms * 1000).rounded() / 1000])
+    state.lock.lock()
+    let framesNow = state.framesWritten
+    let failuresNow = state.ioFailures
+    state.lock.unlock()
+    // frames/failures let the parent verify capture is healthy again after a
+    // transient failure and clear its recording-problem warning.
+    emit(["event": "level", "rms": (rms * 1000).rounded() / 1000,
+          "frames": framesNow, "failures": failuresNow])
     // Unauthorized taps deliver buffers full of exact zeros instead of failing;
     // leave a diagnostic breadcrumb once if the first seconds are dead silent.
     state.lock.lock()
@@ -352,6 +548,7 @@ levelTimer.setEventHandler {
         log("3s of pure zeros so far: either nothing is playing, or System Audio " +
             "Recording permission is missing (unauthorized taps read as silence). " +
             "Check System Settings > Privacy & Security > Screen & System Audio Recording.")
+        emit(["event": "warning", "code": "permission_silence"])
     } else {
         state.lock.unlock()
     }
