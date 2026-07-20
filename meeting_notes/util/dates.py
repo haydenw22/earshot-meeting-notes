@@ -35,11 +35,14 @@ def today_pair() -> tuple[str, str]:
 
 
 def friendly_day(iso: str) -> str:
-    """'2026-07-20' (or an ISO timestamp) -> 'July 20'. Anything unparseable is
-    returned untouched — used for server-supplied dates like a trial's end."""
+    """'2026-07-20' (or an ISO timestamp) -> 'July 20', or 'June 26, 2126' when
+    the date falls outside the current year (otherwise "Renews June 26" on a
+    far-future grant reads as a date that already passed). Anything unparseable
+    is returned untouched — used for server-supplied dates like a trial's end."""
     s = (iso or "").strip()
     try:
         d = _dt.date.fromisoformat(s[:10])
     except ValueError:
         return s
-    return f"{d.strftime('%B')} {d.day}"
+    day = f"{d.strftime('%B')} {d.day}"
+    return day if d.year == _dt.date.today().year else f"{day}, {d.year}"

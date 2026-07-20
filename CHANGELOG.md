@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.35.1] — 2026-07-20 · Renewal dates show their year
+
+### Fixed
+
+- Renewal, trial and beta end dates now include the year whenever it is not the current year. A subscription ending in a future year used to render as just "June 26", which read as a date that had already passed.
+
 ## [0.35.0] — 2026-07-17 · Earshot comes to the Mac
 
 ### Added

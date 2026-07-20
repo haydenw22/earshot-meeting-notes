@@ -15,7 +15,7 @@ from meeting_notes.notes.schema import MeetingNotes, notes_tool_schema  # noqa: 
 from meeting_notes.storage import db as dbmod  # noqa: E402
 from meeting_notes.storage.repository import MeetingRepository  # noqa: E402
 from meeting_notes.transcription.merge import merge_transcripts  # noqa: E402
-from meeting_notes.util.dates import human_date, iso_date  # noqa: E402
+from meeting_notes.util.dates import friendly_day, human_date, iso_date  # noqa: E402
 
 
 def test_dates():
@@ -26,6 +26,16 @@ def test_dates():
     assert human_date(dt.date(2026, 6, 11)) == "11th June 2026"  # teens are 'th'
     assert human_date(dt.date(2026, 6, 21)) == "21st June 2026"
     assert iso_date(dt.date(2026, 6, 25)) == "2026-06-25"
+
+    # friendly_day: current-year dates stay short; any other year is spelled
+    # out, so a 100-year admin grant can't render as an already-passed date
+    # ("Renews June 26" vs "Renews June 26, 2126"). Year-relative on purpose.
+    this_year = dt.date.today().year
+    assert friendly_day(f"{this_year}-06-26") == "June 26"
+    assert friendly_day("2126-06-26") == "June 26, 2126"
+    assert friendly_day(f"{this_year + 1}-01-02") == f"January 2, {this_year + 1}"
+    assert friendly_day("2126-06-26T13:33:21+00:00") == "June 26, 2126"  # ISO timestamps too
+    assert friendly_day("not-a-date") == "not-a-date"  # unparseable passes through
     print("  dates OK")
 
 
