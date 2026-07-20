@@ -13,7 +13,12 @@ import sys
 if sys.platform == "darwin":
     from ._capture_mac import DualStreamRecorder  # noqa: F401
     from ._capture_mac import _MicStream as _Stream  # noqa: F401
+    from ._capture_mac import ensure_capture_permissions  # noqa: F401
 else:
     # _Stream and pyaudio are re-exported because tests and tools reach into
     # capture._Stream / capture.pyaudio.paContinue.
     from ._capture_win import DualStreamRecorder, _Stream, pyaudio  # noqa: F401
+
+    def ensure_capture_permissions(mic_index=None) -> None:
+        """Windows opens its permission-capable streams during start()."""
+        return None

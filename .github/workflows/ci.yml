@@ -33,6 +33,7 @@ jobs:
         run: |
           python tests/test_core.py
           python tests/test_changelog.py
+          python tests/test_audit_fixes.py
           python tests/test_resilience.py
           python tests/test_finalize.py
           python tests/test_features2.py
@@ -50,6 +51,7 @@ jobs:
           python tests/test_due_dates.py
           python tests/test_pages.py
           python tests/test_cloud.py
+          python tests/test_share_link.py
           python tests/test_onboarding.py
           python tests/test_updater.py
           python tests/test_updater_mac.py
@@ -73,6 +75,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.lock.macos.txt
+          pip install pyinstaller==6.21.0
 
       - name: Build the audio tap helper (compile check)
         run: sh packaging/mac/audiotap/build.sh
@@ -87,6 +90,7 @@ jobs:
         run: |
           python tests/test_core.py
           python tests/test_changelog.py
+          python tests/test_audit_fixes.py
           python tests/test_resilience.py
           python tests/test_finalize.py
           python tests/test_features2.py
@@ -104,7 +108,32 @@ jobs:
           python tests/test_due_dates.py
           python tests/test_pages.py
           python tests/test_cloud.py
+          python tests/test_share_link.py
           python tests/test_onboarding.py
           python tests/test_updater.py
           python tests/test_updater_mac.py
+          python tests/test_capture_mac.py
           python tests/test_ghost_flash.py
+
+      - name: Build and validate the packaged macOS app
+        run: |
+          python -m PyInstaller packaging/earshot_mac.spec --noconfirm --clean --distpath dist --workpath build
+          plutil -lint dist/Earshot.app/Contents/Info.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/Earshot.app/Contents/Info.plist)" = "app.tryearshot.earshot"
+          test -n "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' dist/Earshot.app/Contents/Info.plist)"
+          codesign --verify --deep --strict --verbose=2 dist/Earshot.app
+          file dist/Earshot.app/Contents/MacOS/Earshot | grep -q arm64
+
+      - name: Packaged app launch smoke test
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: |
+          dist/Earshot.app/Contents/MacOS/Earshot > "$RUNNER_TEMP/earshot-launch.log" 2>&1 &
+          pid=$!
+          sleep 8
+          if ! kill -0 "$pid" 2>/dev/null; then
+            cat "$RUNNER_TEMP/earshot-launch.log"
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" || true

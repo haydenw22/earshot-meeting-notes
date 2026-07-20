@@ -38,6 +38,11 @@ class SpoolInfo:
     path: str          # raw interleaved int16 PCM
     rate: int
     channels: int
+    # Delay from the recorder's shared timeline origin to the first frame in
+    # this spool. Capture backends normally start within milliseconds, but a
+    # device/permission stall can make the gap material. Finalisation inserts
+    # this silence at the FRONT so the two channels remain time-aligned.
+    start_offset_secs: float = 0.0
 
 
 @dataclass
@@ -176,6 +181,15 @@ def _stream_raw_to_wav(spool: SpoolInfo, out_tmp: Path) -> int:
     out_tmp.parent.mkdir(parents=True, exist_ok=True)
     with sf.SoundFile(str(out_tmp), "w", samplerate=TARGET_RATE, channels=1,
                       subtype="PCM_16", format="WAV") as out:
+        leading_frames = max(0, int(round(float(spool.start_offset_secs or 0.0) * TARGET_RATE)))
+        if leading_frames:
+            left = leading_frames
+            silence = np.zeros(min(_BLOCK_FRAMES, left), dtype=np.float32)
+            while left > 0:
+                n = min(len(silence), left)
+                out.write(silence[:n])
+                written += n
+                left -= n
         exists = spool.path and os.path.exists(spool.path)
         if exists:
             with open(spool.path, "rb") as fh:
@@ -290,9 +304,11 @@ def salvage_spool(audio_dir: Path) -> Optional[dict]:
         them = meta.get("them") or {}
         spool = RecordingSpool(
             me=SpoolInfo(path=str(me.get("path") or ""), rate=int(me.get("rate") or TARGET_RATE),
-                         channels=int(me.get("channels") or 1)),
+                         channels=int(me.get("channels") or 1),
+                         start_offset_secs=float(me.get("start_offset_secs") or 0.0)),
             them=SpoolInfo(path=str(them.get("path") or ""), rate=int(them.get("rate") or TARGET_RATE),
-                           channels=int(them.get("channels") or 1)),
+                           channels=int(them.get("channels") or 1),
+                           start_offset_secs=float(them.get("start_offset_secs") or 0.0)),
             duration_secs=0.0,
             sidecar_path=str(sc),
         )

@@ -10,6 +10,6 @@ xcrun swiftc -O \
     main.swift \
     -o ../bin/earshot-audiotap \
     -framework CoreAudio \
-    -framework AVFAudio \
+    -framework AVFoundation \
     -framework Foundation
 echo "built $(cd ../bin && pwd)/earshot-audiotap"

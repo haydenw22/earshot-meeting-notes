@@ -24,3 +24,5 @@ dist/
 *.spec.bak
 .claude/
 packaging/mac/bin/
+.DS_Store
+**/.DS_Store

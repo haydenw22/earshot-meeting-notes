@@ -172,6 +172,17 @@ class UpdateDialog(QDialog):
     def _on_done(self, path: str) -> None:
         self.worker = None
         if sys.platform == "darwin":
+            from . import workers
+
+            window = self.parentWidget()
+            record = getattr(window, "record", None)
+            if ((record is not None and record.is_busy()) or workers.active_count()):
+                updater.cleanup_download(path)
+                self._on_failed(
+                    "Finish the active recording or background task before installing the update."
+                )
+                return
+        if sys.platform == "darwin":
             self.status.setText("Installing the update. Earshot will close and reopen. "
                                 "Your recordings and notes are kept.")
         else:
@@ -180,12 +191,19 @@ class UpdateDialog(QDialog):
         try:
             updater.run_installer(path)
         except Exception as e:  # noqa: BLE001
+            updater.cleanup_download(path)
             self._on_failed(f"Couldn't start the installer: {e}")
             return
-        # Quit so the installer can replace the running app; it relaunches Earshot.
-        app = QApplication.instance()
-        if app is not None:
-            app.quit()
+        # Close the main window so its closeEvent performs the normal worker,
+        # overlay and update-thread cleanup. QApplication.quit() bypassed that
+        # guard and could interrupt an active recording.
+        window = self.parentWidget()
+        if window is not None:
+            window.close()
+        else:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
 
     def _on_failed(self, msg: str) -> None:
         self.worker = None

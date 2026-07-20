@@ -32,11 +32,16 @@ def _app_icon() -> QIcon:
 
 
 def _setup_replay_flag() -> str:
-    """Path of the one-shot 'replay the setup guide' flag file, next to the exe
-    (frozen) or the repo root (dev). A deploy can drop this file to make the
-    NEXT launch run the first-run wizard once — with all user data untouched.
-    The install dir is used (not the data dir) because deploy tooling reliably
-    writes there."""
+    """Path of the one-shot 'replay the setup guide' flag file.
+
+    A signed macOS bundle must remain immutable, so frozen Mac builds keep the
+    flag in Application Support. Windows retains the deployment-compatible
+    next-to-executable location; development keeps it in the repository root.
+    """
+    if getattr(sys, "frozen", False) and sys.platform == "darwin":
+        from .paths import app_data_dir
+
+        return str(app_data_dir() / "run_setup_once.flag")
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)
     else:
@@ -107,7 +112,7 @@ def run() -> int:
 
     window.show()
 
-    # Packaged Windows builds check GitHub for a newer release in the background;
+    # Packaged Windows and macOS builds check GitHub for a newer release in the background;
     # if one is found the user gets an "Update available" dialog with the
     # changelog and a one-click download+install. Kept on the window so the
     # worker thread isn't garbage-collected mid-check. No-op for dev checkouts.

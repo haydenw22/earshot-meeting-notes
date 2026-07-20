@@ -180,6 +180,11 @@ class DualStreamRecorder:
         return time.monotonic() - self._t0 if self._running else 0.0
 
     @property
+    def started_at(self) -> float:
+        """Shared monotonic origin used by screenshots and bookmarks."""
+        return self._t0
+
+    @property
     def mic_level(self) -> float:
         return self._mic.level if self._mic else 0.0
 

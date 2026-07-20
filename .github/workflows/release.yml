@@ -12,9 +12,9 @@ name: Release
 #   Earshot.dmg       + Earshot.dmg.sha256         (macOS human download)
 #   Earshot-mac.zip   + Earshot-mac.zip.sha256     (macOS auto-update payload)
 #
-# macOS signing is OPTIONAL and secrets-gated: without MACOS_CERT_P12 the job
-# ships an ad-hoc signed app (Gatekeeper "Open Anyway"); adding the Developer
-# ID secrets turns on real signing + notarization with no workflow changes.
+# Manual dry runs may produce an ad-hoc artifact for CI inspection. Tagged
+# production releases fail closed unless every Developer ID + notarization
+# secret is present, and Gatekeeper acceptance is verified before publishing.
 
 on:
   push:
@@ -118,6 +118,15 @@ jobs:
           pip install -r requirements.lock.macos.txt
           pip install pyinstaller==6.21.0
 
+      - name: Require Developer ID signing + notarization for tagged releases
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          missing=0
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD MACOS_CODESIGN_IDENTITY APPLE_NOTARY_ID APPLE_NOTARY_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Required release secret $name is missing"; missing=1; fi
+          done
+          exit "$missing"
+
       - name: Verify tag matches __version__ (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -133,6 +142,14 @@ jobs:
         env:
           QT_QPA_PLATFORM: cocoa
         run: python tests/test_changelog.py
+
+      - name: macOS capture, finalization and updater regression tests
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: |
+          python tests/test_capture_mac.py
+          python tests/test_finalize.py
+          python tests/test_updater_mac.py
 
       - name: Build the audio tap helper
         run: sh packaging/mac/audiotap/build.sh
@@ -153,13 +170,14 @@ jobs:
         if: env.MACOS_CODESIGN_IDENTITY != ''
         run: |
           codesign --force --options runtime --timestamp \
+            --entitlements packaging/mac/audiotap/entitlements.plist \
             -s "$MACOS_CODESIGN_IDENTITY" packaging/mac/bin/earshot-audiotap
 
       - name: Build app (PyInstaller .app bundle)
         run: python -m PyInstaller packaging/earshot_mac.spec --noconfirm --clean --distpath dist --workpath build
 
       - name: Notarize and staple (only when signing)
-        if: env.MACOS_CODESIGN_IDENTITY != '' && env.APPLE_NOTARY_ID != ''
+        if: env.MACOS_CODESIGN_IDENTITY != '' && env.APPLE_NOTARY_ID != '' && env.APPLE_NOTARY_PASSWORD != '' && env.APPLE_TEAM_ID != ''
         run: |
           ditto -c -k --keepParent dist/Earshot.app dist/notarize.zip
           xcrun notarytool submit dist/notarize.zip \
@@ -169,6 +187,14 @@ jobs:
             --wait
           xcrun stapler staple dist/Earshot.app
           rm dist/notarize.zip
+
+      - name: Verify app signature and release trust
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/Earshot.app
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            xcrun stapler validate dist/Earshot.app
+            spctl --assess --type execute --verbose=4 dist/Earshot.app
+          fi
 
       # Earshot-mac.zip is the auto-update payload (ditto preserves the bundle
       # exactly); Earshot.dmg is the human download. Both get the digest the
@@ -180,6 +206,7 @@ jobs:
           (cd dist && shasum -a 256 Earshot-mac.zip > Earshot-mac.zip.sha256)
           (cd dist && shasum -a 256 Earshot.dmg > Earshot.dmg.sha256)
           cat dist/Earshot-mac.zip.sha256 dist/Earshot.dmg.sha256
+          hdiutil verify dist/Earshot.dmg
 
       - name: Upload macOS artifact (always; the dry-run output)
         uses: actions/upload-artifact@v4

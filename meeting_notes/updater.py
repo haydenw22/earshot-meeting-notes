@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -49,6 +51,7 @@ def _platform_assets(platform: str = sys.platform) -> tuple[str, str, bytes, str
 ASSET_NAME, ASSET_DIGEST_NAME, _MAGIC, _MAGIC_ERR = _platform_assets()
 _UA = "Earshot-Updater"
 _TMP_PREFIX = "EarshotUpdate-"
+_MAC_BUNDLE_ID = "app.tryearshot.earshot"
 
 # The real installer is ~150 MB; anything wildly beyond that is not our release.
 MAX_INSTALLER_BYTES = 500 * 1024 * 1024
@@ -336,28 +339,124 @@ def _running_app_bundle(executable: str | None = None) -> str | None:
 def _compose_install_script(pid: int, new_app: str, dest_app: str, workdir: str) -> str:
     """The shell script that performs the swap AFTER the app quits.
 
-    Safety property: the old app is moved aside (not deleted) before the new
-    one moves in, and restored if that move fails — a botched update can never
-    leave the user with no app. The quarantine strip lets an unsigned update
-    relaunch without Gatekeeper re-blocking it; on a notarized build it is a
-    harmless no-op."""
+    The old bundle remains beside the new one until LaunchServices starts the
+    replacement and its process survives a short health window. Every failure
+    path restores and relaunches the old bundle. Signature/Gatekeeper checks
+    happen in Python before this detached script is allowed to exist."""
     q = lambda s: "'" + str(s).replace("'", "'\\''") + "'"  # noqa: E731
     old = dest_app + ".old"
+    new_exe = os.path.join(dest_app, "Contents", "MacOS", "Earshot")
     return f"""#!/bin/sh
-# Earshot update swap script (auto-generated; deletes itself and its workdir)
+# Earshot update swap script (auto-generated)
+LOG_DIR="$HOME/Library/Logs/Earshot"
+/bin/mkdir -p "$LOG_DIR"
+exec >>"$LOG_DIR/update.log" 2>&1
+echo "$(/bin/date -u) starting update swap"
+cleanup() {{ /bin/rm -rf {q(workdir)}; }}
+relaunch_old() {{ /usr/bin/open {q(dest_app)} >/dev/null 2>&1 || true; }}
+rollback() {{
+    /bin/rm -rf {q(dest_app)}
+    if /bin/mv {q(old)} {q(dest_app)}; then relaunch_old; fi
+    exit 1
+}}
+trap cleanup EXIT
 while /bin/kill -0 {int(pid)} 2>/dev/null; do sleep 0.3; done
-rm -rf {q(old)}
-mv {q(dest_app)} {q(old)} || exit 1
-if mv {q(new_app)} {q(dest_app)}; then
-    rm -rf {q(old)}
-else
-    /usr/bin/ditto {q(new_app)} {q(dest_app)} || {{ rm -rf {q(dest_app)}; mv {q(old)} {q(dest_app)}; exit 1; }}
-    rm -rf {q(old)}
+if [ -e {q(old)} ]; then
+    echo "backup path already exists; refusing to overwrite it"
+    relaunch_old
+    exit 1
 fi
-/usr/bin/xattr -dr com.apple.quarantine {q(dest_app)} 2>/dev/null || true
-/usr/bin/open {q(dest_app)}
-rm -rf {q(workdir)}
+/bin/mv {q(dest_app)} {q(old)} || {{ relaunch_old; exit 1; }}
+/bin/mv {q(new_app)} {q(dest_app)} || {{ /bin/mv {q(old)} {q(dest_app)}; relaunch_old; exit 1; }}
+/usr/bin/open {q(dest_app)} || rollback
+
+# LaunchServices returning success only means it accepted the request. Require
+# the real bundled process to appear and survive before deleting the rollback.
+NEW_PID=""
+ATTEMPTS=0
+while [ "$ATTEMPTS" -lt 30 ]; do
+    NEW_PID=$(/usr/bin/pgrep -f {q(new_exe)} | /usr/bin/head -n 1)
+    [ -n "$NEW_PID" ] && break
+    ATTEMPTS=$((ATTEMPTS + 1))
+    sleep 0.5
+done
+[ -n "$NEW_PID" ] || rollback
+sleep 3
+/bin/kill -0 "$NEW_PID" 2>/dev/null || rollback
+/bin/rm -rf {q(old)}
+echo "$(/bin/date -u) update healthy; old bundle removed"
 """
+
+
+def _app_plist(app_path: str) -> dict:
+    plist_path = os.path.join(app_path, "Contents", "Info.plist")
+    try:
+        with open(plist_path, "rb") as fh:
+            value = plistlib.load(fh)
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise ValueError("update blocked: app has no valid Info.plist") from exc
+    if not isinstance(value, dict):
+        raise ValueError("update blocked: app Info.plist is malformed")
+    return value
+
+
+def _codesign_details(app_path: str) -> tuple[str, str]:
+    proc = subprocess.run(
+        ["/usr/bin/codesign", "-d", "--verbose=4", "-r-", app_path],
+        capture_output=True, text=True, check=False,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if proc.returncode:
+        raise ValueError("update blocked: app signature metadata is unreadable")
+    team = ""
+    requirement = ""
+    for line in output.splitlines():
+        if line.startswith("TeamIdentifier="):
+            team = line.partition("=")[2].strip()
+        elif "designated =>" in line:
+            requirement = line.partition("designated =>")[2].strip()
+    if not team or team.lower() in {"not set", "none"}:
+        raise ValueError("update blocked: app is not Developer ID signed")
+    if not requirement:
+        raise ValueError("update blocked: app has no designated signing requirement")
+    return team, requirement
+
+
+def _validate_mac_update_app(new_app: str, current_app: str) -> None:
+    """Fail closed unless `new_app` is the expected newer notarized Earshot."""
+    new_info = _app_plist(new_app)
+    current_info = _app_plist(current_app)
+    if new_info.get("CFBundleIdentifier") != _MAC_BUNDLE_ID:
+        raise ValueError("update blocked: unexpected macOS bundle identifier")
+    if current_info.get("CFBundleIdentifier") != _MAC_BUNDLE_ID:
+        raise ValueError("update blocked: running app has an unexpected bundle identifier")
+    new_version = str(new_info.get("CFBundleShortVersionString") or "")
+    old_version = str(current_info.get("CFBundleShortVersionString") or "")
+    if not _is_newer(new_version, old_version):
+        raise ValueError("update blocked: replacement app is not newer than the running app")
+
+    verified = subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if verified.returncode:
+        raise ValueError("update blocked: replacement app has an invalid code signature")
+    current_team, requirement = _codesign_details(current_app)
+    new_team, _ = _codesign_details(new_app)
+    if new_team != current_team:
+        raise ValueError("update blocked: replacement app was signed by a different developer")
+    requirement_check = subprocess.run(
+        ["/usr/bin/codesign", f"-R={requirement}", "--verify", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if requirement_check.returncode:
+        raise ValueError("update blocked: replacement app does not match Earshot's signing identity")
+    gatekeeper = subprocess.run(
+        ["/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if gatekeeper.returncode:
+        raise ValueError("update blocked: replacement app is not accepted by Gatekeeper")
 
 
 def _install_mac_update(zip_path: str) -> None:
@@ -365,18 +464,44 @@ def _install_mac_update(zip_path: str) -> None:
     the archive doesn't contain a launchable Earshot.app or we're not running
     from inside a bundle; the caller shows the error and the app keeps running
     on the current version."""
-    workdir = tempfile.mkdtemp(prefix=_TMP_PREFIX)
-    subprocess.run(["/usr/bin/ditto", "-x", "-k", zip_path, workdir], check=True,
-                   capture_output=True)
-    new_app = os.path.join(workdir, "Earshot.app")
-    main_exe = os.path.join(new_app, "Contents", "MacOS", "Earshot")
-    if not (os.path.isfile(main_exe) and os.access(main_exe, os.X_OK)):
-        raise ValueError("update blocked: archive does not contain a launchable Earshot.app")
     dest_app = _running_app_bundle()
     if not dest_app:
         raise RuntimeError("not running from an installed Earshot.app; cannot self-update")
-    script = os.path.join(workdir, "install.sh")
-    with open(script, "w", encoding="utf-8") as f:
-        f.write(_compose_install_script(os.getpid(), new_app, dest_app, workdir))
-    os.chmod(script, 0o700)
-    subprocess.Popen(["/bin/sh", script], close_fds=True, start_new_session=True)
+    dest_app = os.path.realpath(dest_app)
+    if dest_app == "/Volumes" or dest_app.startswith("/Volumes" + os.sep):
+        raise RuntimeError(
+            "Move Earshot to Applications before updating; apps running from a disk image "
+            "cannot update themselves."
+        )
+    if not os.path.isdir(dest_app):
+        raise RuntimeError("the running Earshot.app bundle cannot be found")
+    parent = os.path.dirname(dest_app)
+    if not os.access(parent, os.W_OK | os.X_OK):
+        raise PermissionError(
+            "Earshot cannot replace this installation. Move it to a folder you can modify "
+            "or install the update manually."
+        )
+    if os.path.exists(dest_app + ".old"):
+        raise RuntimeError(
+            "A previous Earshot update backup still exists. Reopen Earshot or remove the "
+            ".old backup manually before retrying."
+        )
+
+    workdir = tempfile.mkdtemp(prefix=_TMP_PREFIX)
+    try:
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", zip_path, workdir], check=True,
+                       capture_output=True)
+        new_app = os.path.join(workdir, "Earshot.app")
+        main_exe = os.path.join(new_app, "Contents", "MacOS", "Earshot")
+        if not (os.path.isfile(main_exe) and os.access(main_exe, os.X_OK)):
+            raise ValueError("update blocked: archive does not contain a launchable Earshot.app")
+        _validate_mac_update_app(new_app, dest_app)
+        script = os.path.join(workdir, "install.sh")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(_compose_install_script(os.getpid(), new_app, dest_app, workdir))
+        os.chmod(script, 0o700)
+        subprocess.Popen(["/bin/sh", script], close_fds=True, start_new_session=True)
+    except BaseException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    cleanup_download(zip_path)

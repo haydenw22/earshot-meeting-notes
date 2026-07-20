@@ -6,13 +6,12 @@ has a key; `LastUsedTimeStop == 0` means it is capturing RIGHT NOW. This covers
 Zoom, Teams, Discord and browser-tab calls (Meet shows up as the browser exe) —
 no per-app integration, no extra dependencies, no audio probing.
 
-macOS: there is no per-app equivalent an ordinary app may read, so this is a
-heuristic: Core Audio says whether the default input device is capturing at
-all (kAudioDevicePropertyDeviceIsRunningSomewhere), and the running process
-list says which known meeting apps / browsers could be the reason. While
-Earshot itself records, the mic naturally reads busy, which keeps an active
-call "active" (no false call-ended toasts) at the cost of a rare false
-call-started if a meeting app is merely open during an unrelated recording.
+macOS: there is no supported per-app equivalent an ordinary app may read, so
+this is explicitly approximate. Core Audio checks every input device (not just
+the default) for active capture, then the process list identifies dedicated
+meeting apps that could be responsible. Browsers are deliberately excluded on
+macOS because the OS cannot distinguish Meet from a voice note or unrelated
+mic use; the Settings UI discloses this limitation.
 """
 from __future__ import annotations
 
@@ -105,7 +104,7 @@ _MAC_BROWSER_PROCS = {
 
 
 def _mac_mic_in_use() -> bool:
-    """True when the default input device is capturing in ANY process."""
+    """True when any Core Audio input device is capturing in any process."""
     import ctypes
     import ctypes.util
 
@@ -121,25 +120,47 @@ def _mac_mic_in_use() -> bool:
 
     system_object = 1  # kAudioObjectSystemObject
     scope_global = int.from_bytes(b"glob", "big")
-    addr = _Address(int.from_bytes(b"dIn ", "big"), scope_global, 0)  # default input
-    dev = ctypes.c_uint32(0)
-    size = ctypes.c_uint32(ctypes.sizeof(dev))
+    scope_input = int.from_bytes(b"inpt", "big")
+    addr = _Address(int.from_bytes(b"dev#", "big"), scope_global, 0)  # all devices
+    size = ctypes.c_uint32(0)
+    if ca.AudioObjectGetPropertyDataSize(system_object, ctypes.byref(addr), 0, None,
+                                         ctypes.byref(size)) != 0:
+        return False
+    count = size.value // ctypes.sizeof(ctypes.c_uint32)
+    if not count:
+        return False
+    devices = (ctypes.c_uint32 * count)()
     if ca.AudioObjectGetPropertyData(system_object, ctypes.byref(addr), 0, None,
-                                     ctypes.byref(size), ctypes.byref(dev)) != 0:
+                                     ctypes.byref(size), devices) != 0:
         return False
-    if dev.value == 0:
-        return False
-    addr = _Address(int.from_bytes(b"gone", "big"), scope_global, 0)  # IsRunningSomewhere
-    running = ctypes.c_uint32(0)
-    size = ctypes.c_uint32(ctypes.sizeof(running))
-    if ca.AudioObjectGetPropertyData(dev.value, ctypes.byref(addr), 0, None,
-                                     ctypes.byref(size), ctypes.byref(running)) != 0:
-        return False
-    return running.value != 0
+    streams_selector = int.from_bytes(b"stm#", "big")
+    running_selector = int.from_bytes(b"gone", "big")
+    for device in devices:
+        # Devices without input streams are outputs and cannot be microphones.
+        streams = _Address(streams_selector, scope_input, 0)
+        stream_size = ctypes.c_uint32(0)
+        if ca.AudioObjectGetPropertyDataSize(device, ctypes.byref(streams), 0, None,
+                                             ctypes.byref(stream_size)) != 0:
+            continue
+        if stream_size.value == 0:
+            continue
+        running_addr = _Address(running_selector, scope_global, 0)
+        running = ctypes.c_uint32(0)
+        running_size = ctypes.c_uint32(ctypes.sizeof(running))
+        if ca.AudioObjectGetPropertyData(device, ctypes.byref(running_addr), 0, None,
+                                         ctypes.byref(running_size), ctypes.byref(running)) == 0:
+            if running.value != 0:
+                return True
+    return False
 
 
 def _mac_apps_classified() -> list[tuple[str, str]]:
-    """The macOS heuristic: mic busy + a known meeting app / browser running."""
+    """Approximation: any input busy + a dedicated meeting app running.
+
+    Browsers are intentionally not returned: public macOS APIs cannot identify
+    which process owns the input, so a browser entry would be especially prone
+    to false prompts.
+    """
     try:
         if not _mac_mic_in_use():
             return []
@@ -153,8 +174,6 @@ def _mac_apps_classified() -> list[tuple[str, str]]:
         base = os.path.basename(line.strip())
         if base in _MAC_MEETING_PROCS:
             label, cat = _MAC_MEETING_PROCS[base], "meeting"
-        elif base in _MAC_BROWSER_PROCS:
-            label, cat = _MAC_BROWSER_PROCS[base], "browser"
         else:
             continue
         if label not in seen:

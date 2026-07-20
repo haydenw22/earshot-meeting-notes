@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import plistlib
 import stat
 import subprocess
 import sys
@@ -158,16 +159,19 @@ def test_running_app_bundle():
 
 
 def test_compose_install_script():
-    print("== swap script: wait loop, rollback, quarantine strip, relaunch ==")
+    print("== swap script: wait loop, health-check, rollback, relaunch ==")
     script = updater._compose_install_script(
         4242, "/tmp/work/Earshot.app", "/Applications/Earshot.app", "/tmp/work")
     check("waits for the app to exit", "/bin/kill -0 4242" in script)
     check("moves the old app aside first",
-          "mv '/Applications/Earshot.app' '/Applications/Earshot.app.old'" in script)
+          "/bin/mv '/Applications/Earshot.app' '/Applications/Earshot.app.old'" in script)
     check("restores the old app if the swap fails",
-          "mv '/Applications/Earshot.app.old' '/Applications/Earshot.app'" in script)
-    check("strips quarantine so an unsigned update can relaunch",
-          "xattr -dr com.apple.quarantine" in script)
+          "/bin/mv '/Applications/Earshot.app.old' '/Applications/Earshot.app'" in script)
+    check("keeps quarantine/Gatekeeper protections", "xattr" not in script)
+    check("health-checks the real bundled process", "/usr/bin/pgrep -f" in script)
+    check("deletes rollback only after the health check",
+          script.rfind("/bin/rm -rf '/Applications/Earshot.app.old'")
+          > script.find("/bin/kill -0 \"$NEW_PID\""))
     check("relaunches the installed app", "/usr/bin/open '/Applications/Earshot.app'" in script)
     check("cleans up its workdir", "rm -rf '/tmp/work'" in script)
     hostile = updater._compose_install_script(1, "/tmp/o'brien/Earshot.app",
@@ -177,7 +181,7 @@ def test_compose_install_script():
 
 def _fake_app(path: Path, marker: str) -> None:
     exe = path / "Contents" / "MacOS"
-    exe.mkdir(parents=True)
+    exe.mkdir(parents=True, exist_ok=True)
     main = exe / "Earshot"
     main.write_text("#!/bin/sh\nexit 0\n")
     main.chmod(main.stat().st_mode | stat.S_IEXEC)
@@ -204,6 +208,11 @@ def test_mac_swap_integration():
     # open -> true. Everything else runs for real.
     script = script.replace(f"/bin/kill -0 {os.getpid()}", "/bin/kill -0 999999999")
     script = script.replace("/usr/bin/open", "/usr/bin/true")
+    script = "\n".join(
+        "    NEW_PID=$$" if line.strip().startswith("NEW_PID=$(/usr/bin/pgrep") else line
+        for line in script.splitlines()
+    )
+    script = script.replace("sleep 3", "sleep 0")
     sh = work / "install.sh"
     sh.write_text(script)
     sh.chmod(0o700)
@@ -215,6 +224,88 @@ def test_mac_swap_integration():
     check("workdir cleaned up", not work.exists())
 
 
+def test_mac_swap_rolls_back_failed_launch():
+    if sys.platform != "darwin":
+        print("== swap rollback integration skipped (not macOS) ==")
+        return
+    print("== swap integration: a replacement that never launches is rolled back ==")
+    root = Path(tempfile.mkdtemp(prefix="earshot_swap_rollback_"))
+    dest = root / "Installed" / "Earshot.app"
+    dest.parent.mkdir()
+    _fake_app(dest, "OLD")
+    work = root / "work"
+    work.mkdir()
+    new_app = work / "Earshot.app"
+    _fake_app(new_app, "NEW")
+    script = updater._compose_install_script(999999999, str(new_app), str(dest), str(work))
+    script = script.replace("/usr/bin/open", "/usr/bin/true")
+    script = script.replace('while [ "$ATTEMPTS" -lt 30 ]', 'while [ "$ATTEMPTS" -lt 1 ]')
+    script = script.replace("sleep 0.5", "sleep 0")
+    sh = work / "install.sh"
+    sh.write_text(script)
+    sh.chmod(0o700)
+    result = subprocess.run(["/bin/sh", str(sh)], check=False, timeout=10)
+    check("failed health check returns failure", result.returncode != 0)
+    check("old app restored after failed launch",
+          (dest / "Contents" / "marker.txt").read_text() == "OLD")
+    check("rollback bundle consumed", not (dest.parent / "Earshot.app.old").exists())
+
+
+def _plist_app(path: Path, version: str, bundle_id: str = "app.tryearshot.earshot") -> None:
+    _fake_app(path, version)
+    with open(path / "Contents" / "Info.plist", "wb") as fh:
+        plistlib.dump({
+            "CFBundleIdentifier": bundle_id,
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+        }, fh)
+
+
+def test_signed_bundle_validation():
+    print("== update bundle identity/signature validation ==")
+    root = Path(tempfile.mkdtemp(prefix="earshot_validate_"))
+    current, new = root / "Current.app", root / "New.app"
+    _plist_app(current, "0.35.0")
+    _plist_app(new, "0.36.0")
+    old_run = updater.subprocess.run
+
+    def signed_run(args, **kwargs):
+        if "-d" in args:
+            return subprocess.CompletedProcess(
+                args, 0, "",
+                "TeamIdentifier=EARSHOTTEAM\n"
+                "designated => identifier \"app.tryearshot.earshot\" and anchor apple generic\n",
+            )
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    try:
+        updater.subprocess.run = signed_run
+        updater._validate_mac_update_app(str(new), str(current))
+        check("newer same-identity signed app accepted", True)
+        _plist_app(new, "0.36.0", bundle_id="com.attacker.fake")
+        try:
+            updater._validate_mac_update_app(str(new), str(current))
+            check("wrong bundle identifier rejected", False)
+        except ValueError as exc:
+            check("wrong bundle identifier rejected", "bundle identifier" in str(exc))
+    finally:
+        updater.subprocess.run = old_run
+
+
+def test_update_from_dmg_rejected_before_quit():
+    print("== updater refuses a read-only disk image launch ==")
+    old = updater._running_app_bundle
+    try:
+        updater._running_app_bundle = lambda *a, **k: "/Volumes/Earshot/Earshot.app"
+        try:
+            updater._install_mac_update("/tmp/not-needed.zip")
+            check("DMG launch rejected", False)
+        except RuntimeError as exc:
+            check("DMG launch gives install guidance", "Applications" in str(exc))
+    finally:
+        updater._running_app_bundle = old
+
+
 def main() -> int:
     test_platform_assets()
     test_check_for_update_mac_assets()
@@ -222,6 +313,9 @@ def main() -> int:
     test_running_app_bundle()
     test_compose_install_script()
     test_mac_swap_integration()
+    test_mac_swap_rolls_back_failed_launch()
+    test_signed_bundle_validation()
+    test_update_from_dmg_rejected_before_quit()
     print("\nMAC UPDATER TESTS PASSED")
     return 0
 

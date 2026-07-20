@@ -105,6 +105,7 @@ app = BUNDLE(
     version=VERSION,
     info_plist={
         "CFBundleDisplayName": "Earshot",
+        "CFBundleVersion": VERSION,
         "LSMinimumSystemVersion": "14.4",
         "LSApplicationCategoryType": "public.app-category.productivity",
         "NSHighResolutionCapable": True,

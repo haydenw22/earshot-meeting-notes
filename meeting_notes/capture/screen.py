@@ -11,11 +11,43 @@ their screen".
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
+import sys
 import threading
 import time
 from pathlib import Path
 
 import numpy as np
+
+
+def screen_capture_authorized(*, request: bool = False) -> bool:
+    """Check/request the supported macOS Screen Recording authorization.
+
+    Other platforms do not have this preflight and are treated as authorized.
+    CGRequestScreenCaptureAccess may require the user to restart Earshot before
+    capture becomes available; callers surface that explicitly.
+    """
+    if sys.platform != "darwin":
+        return True
+    framework = ctypes.util.find_library("CoreGraphics")
+    if not framework:
+        return False
+    try:
+        cg = ctypes.CDLL(framework)
+        preflight = cg.CGPreflightScreenCaptureAccess
+        preflight.argtypes = []
+        preflight.restype = ctypes.c_bool
+        if preflight():
+            return True
+        if not request:
+            return False
+        ask = cg.CGRequestScreenCaptureAccess
+        ask.argtypes = []
+        ask.restype = ctypes.c_bool
+        return bool(ask())
+    except (AttributeError, OSError):
+        return False
 
 
 def list_monitors() -> list[str]:
@@ -31,7 +63,9 @@ def list_monitors() -> list[str]:
                 out.append(f"Monitor {i} — {m['width']}×{m['height']}")
             return out or ["Primary monitor"]
     except Exception:
-        return ["Primary monitor"]
+        # On macOS this is commonly a denied Screen Recording permission. A
+        # fabricated monitor entry makes an unavailable feature look healthy.
+        return [] if sys.platform == "darwin" else ["Primary monitor"]
 
 
 class ScreenRecorder:
@@ -57,6 +91,7 @@ class ScreenRecorder:
         self.heartbeat_secs = heartbeat_secs
         self.max_edge = max_edge
         self.count = 0
+        self.error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -80,15 +115,18 @@ class ScreenRecorder:
         try:
             import mss
             from PIL import Image
-        except Exception:
+        except Exception as exc:
+            self.error = f"Screen capture components are unavailable: {exc}"
             return
-        with mss.MSS() as sct:
-            mons = sct.monitors
-            mon = mons[self.monitor] if 0 < self.monitor < len(mons) else mons[-1]
-            last_small: np.ndarray | None = None
-            last_saved = -1e9
-            while not self._stop.is_set():
-                try:
+        try:
+            with mss.MSS() as sct:
+                mons = sct.monitors
+                if len(mons) <= 1:
+                    raise RuntimeError("no capturable monitors are available")
+                mon = mons[self.monitor] if 0 < self.monitor < len(mons) else mons[-1]
+                last_small: np.ndarray | None = None
+                last_saved = -1e9
+                while not self._stop.is_set():
                     grab = sct.grab(mon)
                     img = Image.frombytes("RGB", grab.size, grab.rgb)
                     small = np.asarray(img.resize((160, 90)).convert("L"), dtype=np.int16)
@@ -101,9 +139,9 @@ class ScreenRecorder:
                         last_small = small
                         last_saved = now
                         self.count += 1
-                except Exception:
-                    pass
-                self._stop.wait(self.interval)
+                    self._stop.wait(self.interval)
+        except Exception as exc:
+            self.error = f"Screen capture stopped: {exc}"
 
 
 def list_screenshots(meeting_dir: Path) -> list[tuple[int, Path]]:

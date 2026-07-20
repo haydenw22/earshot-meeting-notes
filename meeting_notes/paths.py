@@ -20,6 +20,11 @@ _LEGACY_DIR_NAMES = ("MeetingNotes",)  # pre-rename data dirs to migrate from
 _recordings_override: Optional[Path] = None
 
 
+def _looks_like_earshot_data(path: Path) -> bool:
+    """Require an Earshot marker before adopting a generically named folder."""
+    return any((path / name).exists() for name in ("meetings.db", "config.json", "recordings"))
+
+
 def set_recordings_dir(path) -> None:
     global _recordings_override
     _recordings_override = Path(path) if path else None
@@ -51,6 +56,11 @@ def app_data_dir() -> Path:
             legacy_dirs.append(Path.home() / APP_DIR_NAME)
         for old in legacy_dirs:
             if old == d or not old.exists():
+                continue
+            if (sys.platform == "darwin" and old == Path.home() / APP_DIR_NAME
+                    and not _looks_like_earshot_data(old)):
+                # `~/Earshot` is a generic user-chosen name. Never move an
+                # unrelated folder merely because it happens to match ours.
                 continue
             try:
                 old.rename(d)  # fast path: same volume, keeps meetings + DB

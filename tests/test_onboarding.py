@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from meeting_notes import paths  # noqa: E402
 from meeting_notes.config import Config  # noqa: E402
 from meeting_notes.storage import db as dbmod  # noqa: E402
 from meeting_notes.storage.repository import MeetingRepository  # noqa: E402
@@ -370,6 +371,24 @@ def main() -> int:
     check("flag present -> replay once", app_mod._consume_replay_flag() is True)
     check("flag consumed (deleted) after replay", not os.path.exists(flag))
     check("second launch -> no replay again", app_mod._consume_replay_flag() is False)
+
+    had_frozen = hasattr(app_mod.sys, "frozen")
+    old_frozen = getattr(app_mod.sys, "frozen", None)
+    old_platform = app_mod.sys.platform
+    try:
+        app_mod.sys.frozen = True
+        app_mod.sys.platform = "darwin"
+        frozen_flag = Path(app_mod._setup_replay_flag())
+        check("frozen Mac replay flag lives in Application Support",
+              frozen_flag.parent == paths.app_data_dir())
+        check("frozen Mac replay flag never modifies Contents/MacOS",
+              "Contents/MacOS" not in str(frozen_flag))
+    finally:
+        app_mod.sys.platform = old_platform
+        if had_frozen:
+            app_mod.sys.frozen = old_frozen
+        else:
+            delattr(app_mod.sys, "frozen")
 
     print("\nONBOARDING TESTS PASSED")
     return 0
