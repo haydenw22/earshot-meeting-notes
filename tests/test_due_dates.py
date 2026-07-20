@@ -151,16 +151,22 @@ def main() -> int:
     check("_set_due(None) clears it", items[0]["due"] is None)
 
     print("== detail page: due chip / mini calendar button render per row ==")
-    with_due = {"task": "Has due", "owner": None, "done": False, "confirmed": True, "due": "2026-07-20"}
+    # A fixed date here is a time bomb: the label becomes "Today"/"Overdue"
+    # once the calendar catches up (it did). Use a always-future date instead.
+    future = _dt.date.today() + _dt.timedelta(days=45)
+    month_abbr = future.strftime("%b")
+    with_due = {"task": "Has due", "owner": None, "done": False, "confirmed": True,
+                "due": future.isoformat()}
     without_due = {"task": "No due", "owner": None, "done": False, "confirmed": True, "due": None}
     row_with = page._action_row(0, dict(with_due))
     row_without = page._action_row(0, dict(without_due))
     from PySide6.QtWidgets import QPushButton
     with_texts = [b.text() for b in row_with.findChildren(QPushButton)]
     without_texts = [b.text() for b in row_without.findChildren(QPushButton)]
-    check("row with a due date shows its label as a button", any("Jul" in t for t in with_texts))
+    check("row with a due date shows its label as a button",
+          any(month_abbr in t for t in with_texts))
     check("row without a due date has no date-label button",
-          not any("Jul" in t for t in without_texts))
+          not any(month_abbr in t for t in without_texts))
 
     print("== home dashboard: _gather_pending carries due, _set_due persists ==")
     home = HomePage(shell, repo, Config(), theme)
