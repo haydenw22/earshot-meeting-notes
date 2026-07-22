@@ -4,6 +4,12 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.35.3] — 2026-07-22 · Icons render correctly on Retina Macs
+
+### Fixed
+
+- Every toolbar and sidebar icon rendered as a broken squiggle on Macs whose main display is a Retina screen: the icon painter targeted physical pixels instead of logical points, so only a magnified corner of each icon was drawn. Icons now render with explicit logical bounds and are crisp on Retina and standard displays alike. Setups with a standard-DPI main display were unaffected, which is why this survived testing.
+
 ## [0.35.2] — 2026-07-22 · Earshot for Mac: first public build
 
 ### Fixed

@@ -6,7 +6,7 @@ high-DPI displays.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
@@ -91,7 +91,11 @@ def pixmap(name: str, color: str, size: int = 20) -> QPixmap:
     pm.setDevicePixelRatio(dpr)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
-    renderer.render(painter)
+    # Explicit logical bounds: render(painter) alone targets the PHYSICAL
+    # device rect, which on a dpr>1 primary display paints a 2x-magnified
+    # top-left crop of the icon (every icon showed as a broken squiggle on
+    # Retina-primary Macs; invisible on 1x-primary setups).
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return pm
 

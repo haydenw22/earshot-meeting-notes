@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
@@ -49,6 +49,7 @@ def logo_pixmap(size: int, dpr: Optional[float] = None) -> QPixmap:
     pm.setDevicePixelRatio(ratio)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
-    renderer.render(painter)
+    # Explicit logical bounds; see icons.pixmap for the dpr>1 crop bug.
+    renderer.render(painter, QRectF(0, 0, size, size))
     painter.end()
     return pm

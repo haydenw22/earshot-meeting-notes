@@ -4,7 +4,7 @@
 ; Produces a per-user installer (no admin rights needed).
 
 #define MyAppName "Earshot"
-#define MyAppVersion "0.35.2"
+#define MyAppVersion "0.35.3"
 #define MyAppExe "Earshot.exe"
 
 [Setup]
