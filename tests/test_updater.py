@@ -22,6 +22,12 @@ import httpx  # noqa: E402
 
 from meeting_notes import updater  # noqa: E402
 
+# This file exercises the WINDOWS update flow; pin the platform constants so it
+# passes identically on any OS (a no-op on Windows). The darwin flow has its
+# own coverage in test_updater_mac.py.
+(updater.ASSET_NAME, updater.ASSET_DIGEST_NAME,
+ updater._MAGIC, updater._MAGIC_ERR) = updater._platform_assets("win32")
+
 
 def check(label, cond):
     print(("  ok  " if cond else " FAIL ") + label)

@@ -9,6 +9,7 @@ embedded here; they persist across mode changes while the mode-dependent panes
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -316,13 +317,22 @@ class SettingsPage(QWidget):
         hcl.addWidget(self.dashboard_toggle)
         lay.addWidget(home_card)
 
-        cd_card, cdl = self._card(
-            "Call detection",
-            "When another app starts using your microphone (Zoom, Teams, a Meet tab…), Earshot "
-            "offers to record — so you never forget to hit Record. Nothing is captured until "
-            "you accept.",
-        )
-        self.call_detect = QCheckBox("Offer to record when a call starts")
+        if sys.platform == "darwin":
+            detect_text = (
+                "macOS does not reveal which app owns a microphone. Earshot can make an "
+                "approximate guess when any input is active while Zoom, Teams, Webex, Slack or "
+                "FaceTime is open. Browsers are excluded to reduce false alerts."
+            )
+            detect_label = "Use approximate call detection"
+        else:
+            detect_text = (
+                "When another app starts using your microphone (Zoom, Teams, a Meet tab…), "
+                "Earshot offers to record — so you never forget to hit Record. Nothing is "
+                "captured until you accept."
+            )
+            detect_label = "Offer to record when a call starts"
+        cd_card, cdl = self._card("Call detection", detect_text)
+        self.call_detect = QCheckBox(detect_label)
         self.call_detect.setChecked(self.cfg.call_detect_enabled)
         cdl.addWidget(self.call_detect)
         lay.addWidget(cd_card)
@@ -440,8 +450,12 @@ class SettingsPage(QWidget):
         form.addRow("Microphone", self.mic_combo)
         form.addRow("System audio", self.them_combo)
         self.monitor_combo = QComboBox()
-        for i, label in enumerate(screen_capture.list_monitors(), start=1):
+        monitor_labels = screen_capture.list_monitors()
+        for i, label in enumerate(monitor_labels, start=1):
             self.monitor_combo.addItem(label, i)
+        if not monitor_labels and sys.platform == "darwin":
+            self.monitor_combo.addItem("Permission required — enable Screen Recording", None)
+            self.monitor_combo.setEnabled(False)
         idx = max(0, self.cfg.screen_monitor - 1)
         if idx < self.monitor_combo.count():
             self.monitor_combo.setCurrentIndex(idx)

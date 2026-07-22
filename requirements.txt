@@ -2,7 +2,10 @@
 # GUI
 PySide6>=6.7,<6.9
 # Audio capture (mic + WASAPI loopback on Windows)
-PyAudioWPatch>=0.2.12.7
+PyAudioWPatch>=0.2.12.7; sys_platform == "win32"
+# Audio capture on macOS (microphone via PortAudio; system audio comes from the
+# bundled earshot-audiotap helper, not a Python package)
+sounddevice>=0.5; sys_platform == "darwin"
 # Audio math / IO / resampling
 numpy>=1.26,<3
 soundfile>=0.12

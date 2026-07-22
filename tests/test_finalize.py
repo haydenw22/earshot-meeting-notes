@@ -68,6 +68,20 @@ def main() -> int:
     check(f"streamed resample matches reference (max err {err:.4f})", err < 0.02)
     check("spools deleted after success", not (tmp / "me.raw").exists() and not (tmp / "them.raw").exists())
 
+    print("== measured stream offsets are padded at the front ==")
+    _make_raw(tmp / "me_offset.raw", 0.5, 48000, 1)
+    _make_raw(tmp / "them_offset.raw", 0.5, 48000, 1, freq=880)
+    offset_res = writer.finalize_recording(RecordingSpool(
+        me=SpoolInfo(str(tmp / "me_offset.raw"), 48000, 1, start_offset_secs=0.25),
+        them=SpoolInfo(str(tmp / "them_offset.raw"), 48000, 1),
+        duration_secs=0.75,
+    ), tmp / "meeting_offset")
+    offset_me, _ = sf.read(offset_res["me"], dtype="float32")
+    check("later mic begins with measured silence",
+          float(np.abs(offset_me[:11000]).max()) < 1e-4)
+    check("mic signal begins after the front pad",
+          float(np.abs(offset_me[12500:18000]).max()) > 0.1)
+
     print("== deletion contract: failure preserves the spools ==")
     _make_raw(tmp / "me2.raw", 1.0, 48000, 1)
     _make_raw(tmp / "them2.raw", 1.0, 48000, 1)

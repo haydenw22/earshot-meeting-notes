@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from ..capture import screen as screen_capture
 from ..util import stats as _stats
+from ..util.open_path import open_path
 
 from ..storage.repository import Meeting
 from .widgets import Card, clear_layout, make_chip, status_chip
@@ -822,7 +823,7 @@ class DetailPage(QWidget):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
-        img = _ClickableImage(lambda p=path: os.startfile(str(p)))  # noqa: S606
+        img = _ClickableImage(lambda p=path: open_path(str(p)))
         pm = QPixmap(str(path))
         if not pm.isNull():
             img.setPixmap(pm.scaledToWidth(int(width), Qt.TransformationMode.SmoothTransformation))
@@ -945,7 +946,7 @@ class DetailPage(QWidget):
             return
         m = self.repo.get(self.meeting_id)
         if m.audio_dir and os.path.isdir(m.audio_dir):
-            os.startfile(m.audio_dir)  # noqa: S606
+            open_path(m.audio_dir)
 
     def _send_todoist(self) -> None:
         """Create a Todoist task for every open action item (deduped by the
@@ -1036,7 +1037,7 @@ class DetailPage(QWidget):
             QMessageBox.critical(self, "Could not save", str(e))
             return
         self.status_label.setText(f"Saved {Path(path).name} — opening preview…")
-        os.startfile(path)  # noqa: S606
+        open_path(path)
 
     def _share_publish(self, m, *, include_transcript: bool) -> None:
         """Create/update the public page off the GUI thread, then store the URL

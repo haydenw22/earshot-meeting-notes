@@ -6,6 +6,7 @@ to save.
 """
 from __future__ import annotations
 
+import sys
 import webbrowser
 
 from PySide6.QtCore import Qt
@@ -53,7 +54,9 @@ _SECTIONS: list[tuple[str, str, list[tuple[str, str]]]] = [
         ("Call detection",
          "When another app starts using your microphone (Zoom, Teams, a Meet tab), "
          "Earshot offers to record so you never forget to hit the button. Nothing is "
-         "captured until you accept. Turn this off in Settings, then General."),
+         "captured until you accept. On macOS this is an approximate signal because "
+         "the OS does not identify the app using an input; browser calls are excluded "
+         "there to reduce false alerts. Turn this off in Settings, then General."),
         ("The recording overlay",
          "A small always-on-top bar shows a timer and two lights that glow with your "
          "mic and the system audio, so you can see at a glance that both sides are "
@@ -112,12 +115,16 @@ _SECTIONS: list[tuple[str, str, list[tuple[str, str]]]] = [
     ("info", "Troubleshooting", [
         ("A channel shows no audio",
          "Check the two lights on the recording overlay. If the system-audio light "
-         "stays dark, pick the right loopback device in Settings, then Audio."),
+         "stays dark, " + (
+             "make sure Earshot is allowed under System Settings, then Privacy and "
+             "Security, then Screen and System Audio Recording."
+             if sys.platform == "darwin" else
+             "pick the right loopback device in Settings, then Audio.")),
         ("Transcription fails",
          "Use Test connection in Settings, then Transcription. It checks the exact "
          "server and key you've entered without freezing the app."),
         ("Where is my data?",
-         "Everything lives on this PC. Recordings and screenshots are in the "
+         "Everything lives on this computer. Recordings and screenshots are in the "
          "storage folder (Settings, then Account, then Open storage folder); the "
          "database and settings sit in the app's data folder."),
         ("A crash interrupted a recording",

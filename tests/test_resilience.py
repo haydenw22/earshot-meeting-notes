@@ -27,6 +27,16 @@ def check(label, cond):
 
 
 def main() -> int:
+    print("== macOS legacy-folder migration guard ==")
+    candidate = Path(tempfile.mkdtemp()) / "Earshot"
+    candidate.mkdir()
+    (candidate / "holiday-photos.txt").write_text("not app data", encoding="utf-8")
+    check("generic ~/Earshot-style folder is not adopted",
+          not paths._looks_like_earshot_data(candidate))
+    (candidate / "config.json").write_text("{}", encoding="utf-8")
+    check("recognizable Earshot data remains migratable",
+          paths._looks_like_earshot_data(candidate))
+
     print("== config crash-safety ==")
     cfg = Config.load()
     cfg.anthropic_api_key = "sk-secret"

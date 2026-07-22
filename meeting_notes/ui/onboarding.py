@@ -258,7 +258,7 @@ class OnboardingDialog(QDialog):
         scl.addWidget(sp)
         scl.addSpacing(6)
         for line in ("Your own AI keys or home Whisper server",
-                     "Everything stays on this PC",
+                     "Everything stays on this computer",
                      "Open source — audit it, fork it",
                      "All core features, no account"):
             b = QLabel(f"•  {line}")
@@ -455,8 +455,8 @@ class OnboardingDialog(QDialog):
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
         b = QLabel(
-            "Managed transcription and AI — no keys, no home server. Sign in to link this PC, "
-            "or skip for now and do it later from the Account page."
+            "Managed transcription and AI with no keys and no home server. Sign in to link "
+            "this computer, or skip for now and do it later from the Account page."
         )
         b.setObjectName("Muted")
         b.setWordWrap(True)

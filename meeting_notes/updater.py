@@ -2,21 +2,22 @@
 
 On startup the packaged app asks GitHub for the latest release; if it's newer
 than the running version we surface a dialog with the changelog and a
-"Download & install" button. Clicking it downloads EarshotSetup.exe and runs it
-silently to replace the app in place.
+"Download & install" button. On Windows that downloads EarshotSetup.exe and
+runs it silently to replace the app in place; on macOS it downloads
+Earshot-mac.zip, verifies it, and swaps the .app bundle before relaunching.
 
 Downloads are verified before anything is executed: the release must ship a
-SHA-256 digest asset (EarshotSetup.exe.sha256, produced by the release
-workflow), the download must stay on official GitHub hosts over HTTPS, look
-like a Windows executable, stay under a sanity size cap, and hash to exactly
-the published digest. A release without a digest asset is treated as not
+SHA-256 digest asset (produced by the release workflow), the download must
+stay on official GitHub hosts over HTTPS, look like the right kind of payload
+for this platform, stay under a sanity size cap, and hash to exactly the
+published digest. A release without a digest asset is treated as not
 installable. Each download goes into its own freshly created private temp
 directory, never a predictable shared path.
 
-The meeting database is NEVER touched by an update: the installer only writes to
-%LOCALAPPDATA%\\Programs\\Earshot (the program files), while recordings and the
-database live under %LOCALAPPDATA%\\Earshot (the data dir). Overwriting one
-leaves the other alone.
+The meeting database is NEVER touched by an update: only the program files
+(%LOCALAPPDATA%\\Programs\\Earshot on Windows, the Earshot.app bundle on
+macOS) are replaced, while recordings and the database live in the separate
+app-data dir. Overwriting one leaves the other alone.
 
 Everything here fails soft — a missing network, a GitHub hiccup or an unexpected
 payload just means "no update this launch", never a crash.
@@ -25,6 +26,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,10 +37,21 @@ import httpx
 
 REPO_SLUG = "haydenw22/earshot-meeting-notes"
 _RELEASES_URL = f"https://api.github.com/repos/{REPO_SLUG}/releases"
-ASSET_NAME = "EarshotSetup.exe"
-ASSET_DIGEST_NAME = ASSET_NAME + ".sha256"
+
+
+def _platform_assets(platform: str = sys.platform) -> tuple[str, str, bytes, str]:
+    """(asset_name, digest_name, payload_magic, magic_error) per platform."""
+    if platform == "darwin":
+        return ("Earshot-mac.zip", "Earshot-mac.zip.sha256", b"PK\x03\x04",
+                "update blocked: response is not a macOS app archive")
+    return ("EarshotSetup.exe", "EarshotSetup.exe.sha256", b"MZ",
+            "update blocked: response is not a Windows installer")
+
+
+ASSET_NAME, ASSET_DIGEST_NAME, _MAGIC, _MAGIC_ERR = _platform_assets()
 _UA = "Earshot-Updater"
 _TMP_PREFIX = "EarshotUpdate-"
+_MAC_BUNDLE_ID = "app.tryearshot.earshot"
 
 # The real installer is ~150 MB; anything wildly beyond that is not our release.
 MAX_INSTALLER_BYTES = 500 * 1024 * 1024
@@ -56,9 +70,9 @@ class UpdateInfo:
 
 
 def is_supported() -> bool:
-    """Auto-update only applies to the packaged Windows build (a dev checkout has
-    no installer to run, and shouldn't be nagged)."""
-    return bool(getattr(sys, "frozen", False)) and sys.platform == "win32"
+    """Auto-update only applies to packaged builds (a dev checkout has no
+    installer to run, and shouldn't be nagged)."""
+    return bool(getattr(sys, "frozen", False)) and sys.platform in ("win32", "darwin")
 
 
 def parse_version(s: str) -> tuple[int, ...]:
@@ -263,8 +277,8 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
                     if cancelled is not None and cancelled():
                         raise DownloadCancelled()
                     if first_bytes and data:
-                        if not data.startswith(b"MZ"):  # PE executable magic
-                            raise ValueError("update blocked: response is not a Windows installer")
+                        if not data.startswith(_MAGIC):  # PE / zip payload magic
+                            raise ValueError(_MAGIC_ERR)
                         first_bytes = False
                     f.write(data)
                     digest.update(data)
@@ -288,13 +302,206 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
 
 
 def run_installer(installer_path: str) -> None:
-    """Launch the downloaded installer silently and DETACHED so it outlives this
-    process and can replace it. /SILENT shows a progress window but no wizard;
-    the installer closes Earshot, installs, then relaunches it. The caller must
-    quit the app immediately after so no files stay locked."""
+    """Kick off the platform's install step, detached so it outlives this
+    process and can replace it. The caller must quit the app immediately after
+    so no files stay locked.
+
+    Windows: run the Inno installer with /SILENT (progress window, no wizard);
+    it closes Earshot, installs, then relaunches it. macOS: extract the
+    verified zip and hand over to a detached swap script (see
+    _install_mac_update)."""
+    if sys.platform == "darwin":
+        _install_mac_update(installer_path)
+        return
     creationflags = 0
     if sys.platform == "win32":
         creationflags = (getattr(subprocess, "DETACHED_PROCESS", 0)
                          | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     subprocess.Popen([installer_path, "/SILENT"], close_fds=True,
                      creationflags=creationflags)
+
+
+# --------------------------------------------------------------- macOS ----
+
+def _running_app_bundle(executable: str | None = None) -> str | None:
+    """Path of the .app bundle the running executable lives in, or None when
+    not inside one (dev checkout). Walks up from Contents/MacOS/Earshot."""
+    path = os.path.abspath(executable or sys.executable)
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path:
+            return None
+        if path.endswith(".app"):
+            return path
+        path = parent
+
+
+def _compose_install_script(pid: int, new_app: str, dest_app: str, workdir: str) -> str:
+    """The shell script that performs the swap AFTER the app quits.
+
+    The old bundle remains beside the new one until LaunchServices starts the
+    replacement and its process survives a short health window. Every failure
+    path restores and relaunches the old bundle. Signature/Gatekeeper checks
+    happen in Python before this detached script is allowed to exist."""
+    q = lambda s: "'" + str(s).replace("'", "'\\''") + "'"  # noqa: E731
+    old = dest_app + ".old"
+    new_exe = os.path.join(dest_app, "Contents", "MacOS", "Earshot")
+    return f"""#!/bin/sh
+# Earshot update swap script (auto-generated)
+LOG_DIR="$HOME/Library/Logs/Earshot"
+/bin/mkdir -p "$LOG_DIR"
+exec >>"$LOG_DIR/update.log" 2>&1
+echo "$(/bin/date -u) starting update swap"
+cleanup() {{ /bin/rm -rf {q(workdir)}; }}
+relaunch_old() {{ /usr/bin/open {q(dest_app)} >/dev/null 2>&1 || true; }}
+rollback() {{
+    /bin/rm -rf {q(dest_app)}
+    if /bin/mv {q(old)} {q(dest_app)}; then relaunch_old; fi
+    exit 1
+}}
+trap cleanup EXIT
+while /bin/kill -0 {int(pid)} 2>/dev/null; do sleep 0.3; done
+if [ -e {q(old)} ]; then
+    echo "backup path already exists; refusing to overwrite it"
+    relaunch_old
+    exit 1
+fi
+/bin/mv {q(dest_app)} {q(old)} || {{ relaunch_old; exit 1; }}
+/bin/mv {q(new_app)} {q(dest_app)} || {{ /bin/mv {q(old)} {q(dest_app)}; relaunch_old; exit 1; }}
+/usr/bin/open {q(dest_app)} || rollback
+
+# LaunchServices returning success only means it accepted the request. Require
+# the real bundled process to appear and survive before deleting the rollback.
+NEW_PID=""
+ATTEMPTS=0
+while [ "$ATTEMPTS" -lt 30 ]; do
+    NEW_PID=$(/usr/bin/pgrep -f {q(new_exe)} | /usr/bin/head -n 1)
+    [ -n "$NEW_PID" ] && break
+    ATTEMPTS=$((ATTEMPTS + 1))
+    sleep 0.5
+done
+[ -n "$NEW_PID" ] || rollback
+sleep 3
+/bin/kill -0 "$NEW_PID" 2>/dev/null || rollback
+/bin/rm -rf {q(old)}
+echo "$(/bin/date -u) update healthy; old bundle removed"
+"""
+
+
+def _app_plist(app_path: str) -> dict:
+    plist_path = os.path.join(app_path, "Contents", "Info.plist")
+    try:
+        with open(plist_path, "rb") as fh:
+            value = plistlib.load(fh)
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise ValueError("update blocked: app has no valid Info.plist") from exc
+    if not isinstance(value, dict):
+        raise ValueError("update blocked: app Info.plist is malformed")
+    return value
+
+
+def _codesign_details(app_path: str) -> tuple[str, str]:
+    proc = subprocess.run(
+        ["/usr/bin/codesign", "-d", "--verbose=4", "-r-", app_path],
+        capture_output=True, text=True, check=False,
+    )
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    if proc.returncode:
+        raise ValueError("update blocked: app signature metadata is unreadable")
+    team = ""
+    requirement = ""
+    for line in output.splitlines():
+        if line.startswith("TeamIdentifier="):
+            team = line.partition("=")[2].strip()
+        elif "designated =>" in line:
+            requirement = line.partition("designated =>")[2].strip()
+    if not team or team.lower() in {"not set", "none"}:
+        raise ValueError("update blocked: app is not Developer ID signed")
+    if not requirement:
+        raise ValueError("update blocked: app has no designated signing requirement")
+    return team, requirement
+
+
+def _validate_mac_update_app(new_app: str, current_app: str) -> None:
+    """Fail closed unless `new_app` is the expected newer notarized Earshot."""
+    new_info = _app_plist(new_app)
+    current_info = _app_plist(current_app)
+    if new_info.get("CFBundleIdentifier") != _MAC_BUNDLE_ID:
+        raise ValueError("update blocked: unexpected macOS bundle identifier")
+    if current_info.get("CFBundleIdentifier") != _MAC_BUNDLE_ID:
+        raise ValueError("update blocked: running app has an unexpected bundle identifier")
+    new_version = str(new_info.get("CFBundleShortVersionString") or "")
+    old_version = str(current_info.get("CFBundleShortVersionString") or "")
+    if not _is_newer(new_version, old_version):
+        raise ValueError("update blocked: replacement app is not newer than the running app")
+
+    verified = subprocess.run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if verified.returncode:
+        raise ValueError("update blocked: replacement app has an invalid code signature")
+    current_team, requirement = _codesign_details(current_app)
+    new_team, _ = _codesign_details(new_app)
+    if new_team != current_team:
+        raise ValueError("update blocked: replacement app was signed by a different developer")
+    requirement_check = subprocess.run(
+        ["/usr/bin/codesign", f"-R={requirement}", "--verify", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if requirement_check.returncode:
+        raise ValueError("update blocked: replacement app does not match Earshot's signing identity")
+    gatekeeper = subprocess.run(
+        ["/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=4", new_app],
+        capture_output=True, text=True, check=False,
+    )
+    if gatekeeper.returncode:
+        raise ValueError("update blocked: replacement app is not accepted by Gatekeeper")
+
+
+def _install_mac_update(zip_path: str) -> None:
+    """Extract the verified zip and launch the detached swap script. Raises if
+    the archive doesn't contain a launchable Earshot.app or we're not running
+    from inside a bundle; the caller shows the error and the app keeps running
+    on the current version."""
+    dest_app = _running_app_bundle()
+    if not dest_app:
+        raise RuntimeError("not running from an installed Earshot.app; cannot self-update")
+    dest_app = os.path.realpath(dest_app)
+    if dest_app == "/Volumes" or dest_app.startswith("/Volumes" + os.sep):
+        raise RuntimeError(
+            "Move Earshot to Applications before updating; apps running from a disk image "
+            "cannot update themselves."
+        )
+    if not os.path.isdir(dest_app):
+        raise RuntimeError("the running Earshot.app bundle cannot be found")
+    parent = os.path.dirname(dest_app)
+    if not os.access(parent, os.W_OK | os.X_OK):
+        raise PermissionError(
+            "Earshot cannot replace this installation. Move it to a folder you can modify "
+            "or install the update manually."
+        )
+    if os.path.exists(dest_app + ".old"):
+        raise RuntimeError(
+            "A previous Earshot update backup still exists. Reopen Earshot or remove the "
+            ".old backup manually before retrying."
+        )
+
+    workdir = tempfile.mkdtemp(prefix=_TMP_PREFIX)
+    try:
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", zip_path, workdir], check=True,
+                       capture_output=True)
+        new_app = os.path.join(workdir, "Earshot.app")
+        main_exe = os.path.join(new_app, "Contents", "MacOS", "Earshot")
+        if not (os.path.isfile(main_exe) and os.access(main_exe, os.X_OK)):
+            raise ValueError("update blocked: archive does not contain a launchable Earshot.app")
+        _validate_mac_update_app(new_app, dest_app)
+        script = os.path.join(workdir, "install.sh")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(_compose_install_script(os.getpid(), new_app, dest_app, workdir))
+        os.chmod(script, 0o700)
+        subprocess.Popen(["/bin/sh", script], close_fds=True, start_new_session=True)
+    except BaseException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    cleanup_download(zip_path)

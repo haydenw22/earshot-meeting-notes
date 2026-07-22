@@ -1,14 +1,20 @@
 name: Release
 
-# Publishes a GitHub Release (with the Windows installer) for every version.
-#   - push a tag like v0.31.0  -> builds the installer AND publishes the release
-#   - run manually (workflow_dispatch) -> builds the installer as an artifact
-#     ONLY, no release published (a safe dry run of the whole pipeline)
+# Publishes a GitHub Release (Windows installer + macOS app) for every version.
+#   - push a tag like v0.35.0  -> builds both platforms AND publishes the release
+#   - run manually (workflow_dispatch) -> builds artifacts ONLY, no release
+#     published (a safe dry run of the whole pipeline)
 #
-# One installer per release: EarshotSetup.exe (stable name, so the
-# /releases/latest/download/EarshotSetup.exe permalink always works), plus
-# EarshotSetup.exe.sha256 — the digest the in-app updater verifies before
-# executing anything.
+# Assets per release (stable names, so the /releases/latest/download/...
+# permalinks always work), each with the SHA-256 digest the in-app updater
+# verifies before installing anything:
+#   EarshotSetup.exe  + EarshotSetup.exe.sha256    (Windows installer)
+#   Earshot.dmg       + Earshot.dmg.sha256         (macOS human download)
+#   Earshot-mac.zip   + Earshot-mac.zip.sha256     (macOS auto-update payload)
+#
+# Manual dry runs may produce an ad-hoc artifact for CI inspection. Tagged
+# production releases fail closed unless every Developer ID + notarization
+# secret is present, and Gatekeeper acceptance is verified before publishing.
 
 on:
   push:
@@ -19,8 +25,8 @@ permissions:
   contents: write        # required to create the release
 
 jobs:
-  build:
-    runs-on: windows-latest   # PyAudioWPatch (WASAPI loopback) is Windows-only
+  build-windows:
+    runs-on: windows-latest
     timeout-minutes: 30
     env:
       QT_QPA_PLATFORM: offscreen
@@ -86,13 +92,170 @@ jobs:
             dist/EarshotSetup.exe.sha256
           if-no-files-found: error
 
-      - name: Compose release notes from CHANGELOG (tags only)
+  build-macos:
+    # Apple Silicon (arm64), minimum macOS 14.4 at runtime.
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      PYTHONIOENCODING: utf-8
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+      APPLE_NOTARY_ID: ${{ secrets.APPLE_NOTARY_ID }}
+      APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies (pinned, macOS) + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock.macos.txt
+          pip install pyinstaller==6.21.0
+
+      # Tagged releases fail closed without Developer ID + notarization
+      # secrets UNLESS the repo variable ALLOW_UNSIGNED_MAC_RELEASE is "true":
+      # a deliberate, recorded decision to ship an unsigned build (users get
+      # Gatekeeper's Open Anyway flow, documented in the release notes).
+      # Delete the variable once the Apple Developer secrets exist.
+      - name: Require Developer ID signing + notarization for tagged releases
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
+        env:
+          ALLOW_UNSIGNED: ${{ vars.ALLOW_UNSIGNED_MAC_RELEASE }}
+        run: |
+          missing=0
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD MACOS_CODESIGN_IDENTITY APPLE_NOTARY_ID APPLE_NOTARY_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Required release secret $name is missing"; missing=1; fi
+          done
+          if [ "$missing" = "1" ] && [ "$ALLOW_UNSIGNED" = "true" ]; then
+            echo "::warning::Shipping an UNSIGNED macOS build (ALLOW_UNSIGNED_MAC_RELEASE=true). Users must approve it via System Settings > Privacy & Security > Open Anyway."
+            missing=0
+          fi
+          exit "$missing"
+
+      - name: Verify tag matches __version__ (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          pkg=$(grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' meeting_notes/__init__.py | head -1 | tr -d '"')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package __version__ = $pkg ; tag = $tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::Tag v$tag does not match meeting_notes.__version__ ($pkg)."
+            exit 1
+          fi
+
+      - name: Version/changelog lockstep test
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: python tests/test_changelog.py
+
+      - name: macOS capture, finalization and updater regression tests
+        env:
+          QT_QPA_PLATFORM: cocoa
+        run: |
+          python tests/test_capture_mac.py
+          python tests/test_finalize.py
+          python tests/test_updater_mac.py
+
+      - name: Build the audio tap helper
+        run: sh packaging/mac/audiotap/build.sh
+
+      - name: Import signing certificate (only when secrets are set)
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          KEYCHAIN=build.keychain
+          security create-keychain -p ci "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p ci "$KEYCHAIN"
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KEYCHAIN"
+          rm cert.p12
+
+      - name: Codesign the audio tap helper (only when signing)
+        if: env.MACOS_CODESIGN_IDENTITY != ''
+        run: |
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/mac/audiotap/entitlements.plist \
+            -s "$MACOS_CODESIGN_IDENTITY" packaging/mac/bin/earshot-audiotap
+
+      - name: Build app (PyInstaller .app bundle)
+        run: python -m PyInstaller packaging/earshot_mac.spec --noconfirm --clean --distpath dist --workpath build
+
+      - name: Notarize and staple (only when signing)
+        if: env.MACOS_CODESIGN_IDENTITY != '' && env.APPLE_NOTARY_ID != '' && env.APPLE_NOTARY_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+        run: |
+          ditto -c -k --keepParent dist/Earshot.app dist/notarize.zip
+          xcrun notarytool submit dist/notarize.zip \
+            --apple-id "$APPLE_NOTARY_ID" \
+            --password "$APPLE_NOTARY_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple dist/Earshot.app
+          rm dist/notarize.zip
+
+      - name: Verify app signature and release trust
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/Earshot.app
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [ -n "$MACOS_CODESIGN_IDENTITY" ]; then
+              xcrun stapler validate dist/Earshot.app
+              spctl --assess --type execute --verbose=4 dist/Earshot.app
+            else
+              echo "::warning::Unsigned build: skipping notarization staple + Gatekeeper assessment (ad-hoc signature verified above)."
+            fi
+          fi
+
+      # Earshot-mac.zip is the auto-update payload (ditto preserves the bundle
+      # exactly); Earshot.dmg is the human download. Both get the digest the
+      # in-app updater / users verify.
+      - name: Package zip + dmg + digests
+        run: |
+          ditto -c -k --keepParent dist/Earshot.app dist/Earshot-mac.zip
+          sh packaging/mac/make_dmg.sh
+          (cd dist && shasum -a 256 Earshot-mac.zip > Earshot-mac.zip.sha256)
+          (cd dist && shasum -a 256 Earshot.dmg > Earshot.dmg.sha256)
+          cat dist/Earshot-mac.zip.sha256 dist/Earshot.dmg.sha256
+          hdiutil verify dist/Earshot.dmg
+
+      - name: Upload macOS artifact (always; the dry-run output)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EarshotMac
+          path: |
+            dist/Earshot.dmg
+            dist/Earshot.dmg.sha256
+            dist/Earshot-mac.zip
+            dist/Earshot-mac.zip.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Compose release notes from CHANGELOG
         run: python packaging/release_notes.py "${GITHUB_REF_NAME#v}" > RELEASE_NOTES.md
 
-      - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           name: Earshot ${{ github.ref_name }}
@@ -100,6 +263,10 @@ jobs:
           files: |
             dist/EarshotSetup.exe
             dist/EarshotSetup.exe.sha256
+            dist/Earshot.dmg
+            dist/Earshot.dmg.sha256
+            dist/Earshot-mac.zip
+            dist/Earshot-mac.zip.sha256
           draft: false
           prerelease: false
           fail_on_unmatched_files: true

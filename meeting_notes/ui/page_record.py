@@ -4,7 +4,7 @@ on stop, then opens the finished meeting.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,11 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import shutil
+import sys
 import time
 
 from ..audio import devices as dev
-from ..audio.capture import DualStreamRecorder
-from ..capture.screen import ScreenRecorder
+from ..audio.capture import DualStreamRecorder, ensure_capture_permissions
+from ..capture.screen import ScreenRecorder, screen_capture_authorized
 from ..paths import meeting_dir
 from ..util.dates import today_pair
 from . import icons
@@ -314,7 +316,9 @@ class RecordPage(QWidget):
         self.timer_label.setObjectName("H2")
         self.timer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ll.addWidget(self.timer_label)
-        self.bookmark_btn = QPushButton("  Bookmark this moment  (Ctrl+B)")
+        self._bookmark_sequence = QKeySequence(QKeySequence.StandardKey.Bold)
+        native_bookmark = self._bookmark_sequence.toString(QKeySequence.SequenceFormat.NativeText)
+        self.bookmark_btn = QPushButton(f"  Bookmark this moment  ({native_bookmark})")
         self.bookmark_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.bookmark_btn.clicked.connect(self._add_bookmark)
         ll.addWidget(self.bookmark_btn)
@@ -343,7 +347,7 @@ class RecordPage(QWidget):
         self.poll = QTimer(self)
         self.poll.setInterval(100)
         self.poll.timeout.connect(self._on_poll)
-        self._bm_shortcut = QShortcut(QKeySequence("Ctrl+B"), self)
+        self._bm_shortcut = QShortcut(self._bookmark_sequence, self)
         self._bm_shortcut.activated.connect(self._add_bookmark)
         self.apply_theme()
 
@@ -573,7 +577,9 @@ class RecordPage(QWidget):
         ok = bool(mics and loops)
         self.record_btn.setEnabled(ok)
         if not ok:
-            self.status_label.setText("No microphone or loopback device found — check Windows sound settings.")
+            where = "macOS" if sys.platform == "darwin" else "Windows"
+            self.status_label.setText(
+                f"No microphone or system audio source found. Check {where} sound settings.")
 
     @staticmethod
     def _select(combo: QComboBox, saved, devs) -> None:
@@ -611,6 +617,15 @@ class RecordPage(QWidget):
         self._write_error_reported = False
         self.input_warning.setVisible(False)
         self.apply_theme()  # reset the banner to its amber (input-warning) style
+        try:
+            # On macOS this explicitly resolves the microphone prompt before
+            # the system-audio tap can begin writing. Other platforms no-op.
+            ensure_capture_permissions(mic.index)
+        except Exception as e:
+            QMessageBox.critical(self, "Recording permission needed", str(e))
+            return
+        if self.capture_screen.isChecked() and not screen_capture_authorized(request=True):
+            self._disable_screen_capture_for_permission()
         meeting = self.repo.create(
             date_text=self._human_date, date_iso=self._iso_date, attendees=attendees, agenda=agenda,
             template=template, folder_id=folder_id,
@@ -627,11 +642,17 @@ class RecordPage(QWidget):
                 loop_index=them.index, loop_channels=them.channels, loop_rate=them.default_samplerate,
                 spool_dir=meeting_dir(self.meeting_id),  # in-folder spool → crash-salvageable
             )
-            self._record_t0 = time.monotonic()
             self.recorder.start()
+            self._record_t0 = self.recorder.started_at
         except Exception as e:
             QMessageBox.critical(self, "Could not start", f"Failed to open audio streams:\n{e}")
-            self.repo.update(self.meeting_id, status="Error", error=str(e))
+            failed_id = self.meeting_id
+            failed_dir = meeting_dir(failed_id)
+            self.repo.delete(failed_id)
+            shutil.rmtree(failed_dir, ignore_errors=True)
+            self.meeting_id = None
+            self.recorder = None
+            self.shell.notify_data_changed()
             return
         self.record_btn.setText("Stop recording")
         self.apply_theme()
@@ -664,6 +685,9 @@ class RecordPage(QWidget):
             self._screen_rec = None
 
     def _toggle_screen_capture(self, checked: bool) -> None:
+        if checked and not screen_capture_authorized(request=True):
+            self._disable_screen_capture_for_permission()
+            return
         self.cfg.capture_screen = checked
         self.cfg.save()
         if self.recorder and self.recorder.running:
@@ -671,6 +695,19 @@ class RecordPage(QWidget):
                 self._maybe_start_screen()
             else:
                 self._stop_screen()
+
+    def _disable_screen_capture_for_permission(self) -> None:
+        with QSignalBlocker(self.capture_screen):
+            self.capture_screen.setChecked(False)
+        self.cfg.capture_screen = False
+        self.cfg.save()
+        QMessageBox.warning(
+            self,
+            "Screen Recording permission needed",
+            "Earshot cannot capture screenshots yet. Allow Earshot under System Settings > "
+            "Privacy & Security > Screen & System Audio Recording, then restart Earshot. "
+            "Audio recording can continue without screenshots.",
+        )
 
     def _on_poll(self) -> None:
         if not self.recorder:
@@ -685,8 +722,20 @@ class RecordPage(QWidget):
         if them_level > _INPUT_ACTIVE_LEVEL:
             self._them_seen = True
         write_error = self.recorder.write_error
+        screen_error = self._screen_rec.error if self._screen_rec else None
+        if not write_error and getattr(self, "_banner_danger", False):
+            # A transiently-latched capture problem healed (see _capture_mac's
+            # recovery logic): drop the red styling so the banner returns to
+            # its amber input-warning look, or hides entirely.
+            self._banner_danger = False
+            self.apply_theme()
         if write_error:
             self._show_write_error(write_error)
+        elif screen_error:
+            self.input_warning_text.setText(
+                screen_error + " Check Screen Recording permission in System Settings."
+            )
+            self.input_warning.setVisible(True)
         else:
             self._update_input_warning(self.recorder.elapsed)
         if self.overlay is not None:
@@ -696,6 +745,11 @@ class RecordPage(QWidget):
     def _update_input_warning(self, elapsed: float) -> None:
         """Show an amber banner if a channel has produced no audio at all after the
         grace period. Clears the moment sound is detected (so normal pauses don't trip it)."""
+        capture_warning = getattr(self.recorder, "capture_warning", None)
+        if capture_warning:
+            self.input_warning_text.setText(capture_warning)
+            self.input_warning.setVisible(True)
+            return
         if elapsed < _INPUT_GRACE_SECS or (self._mic_seen and self._them_seen):
             self.input_warning.setVisible(False)
             return
@@ -711,11 +765,14 @@ class RecordPage(QWidget):
         self.input_warning.setVisible(True)
 
     def _show_write_error(self, write_error: str) -> None:
-        """Persistent danger banner: a spool file stopped accepting writes (disk
-        full, recordings folder disconnected, permissions) while the level meters
+        """Danger banner: a spool file stopped accepting writes (disk full,
+        recordings folder disconnected, permissions) while the level meters
         keep moving off the in-memory buffer. Without this the user only finds
-        out when the recording comes up short. Latched: it never clears while
-        this recording runs, and the failure is stamped on the meeting row."""
+        out when the recording comes up short. Shown while the recorder reports
+        the problem; a transient hiccup that provably heals (macOS tap
+        recovery) clears it, anything persistent stays until the recording
+        stops. The first failure is stamped on the meeting row either way."""
+        self._banner_danger = True
         self.input_warning_icon.setPixmap(icons.pixmap("alert-triangle", self.theme.color("danger"), 18))
         self.input_warning.setStyleSheet(
             f"#WarnBanner{{background:{self.theme.color('danger_soft')};"

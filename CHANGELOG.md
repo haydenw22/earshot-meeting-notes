@@ -4,6 +4,38 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.35.2] — 2026-07-22 · Earshot for Mac: first public build
+
+### Fixed
+
+- A brief system hiccup during a long Mac recording no longer raises a permanent "audio is being lost" alarm. Earshot now watches the capture heal itself: when audio flows cleanly for ten seconds after a momentary drop, the warning clears on its own. Real problems, like a full disk or the capture helper dying, still stay on screen and are stamped on the meeting.
+- The system audio helper logs every capture hiccup with detail to audiotap.log inside the meeting folder, so a recording problem can be diagnosed after the fact.
+
+### Notes
+
+- This is the first published Mac build. See 0.35.0 below for everything the Mac version brings: native Apple Silicon app, microphone plus system audio capture, verified updates, call detection and the same local-first library as Windows.
+
+## [0.35.1] — 2026-07-20 · Renewal dates show their year
+
+### Fixed
+
+- Renewal, trial and beta end dates now include the year whenever it is not the current year. A subscription ending in a future year used to render as just "June 26", which read as a date that had already passed.
+
+## [0.35.0] — 2026-07-17 · Earshot comes to the Mac
+
+### Added
+
+- Earshot now runs natively on Apple Silicon Macs (macOS 14.4 or newer). Download Earshot.dmg from the release and drag Earshot to Applications.
+- Both sides of a meeting are captured on the Mac just like on Windows: your microphone plus system audio. System audio uses Apple's own audio tap, so there is no virtual driver to install and it does not capture the screen. macOS asks once for System Audio Recording permission and once for the microphone before the first recording begins.
+- Automatic updates work on the Mac too, with the same protection as Windows plus native platform checks: every download is verified, and the replacement must be a newer notarized Earshot build signed by the same developer. The old app is retained until the new one has launched successfully.
+- Approximate call detection on the Mac can offer to record when an input is active while Zoom, Teams, Webex, Slack or FaceTime is open. macOS does not reveal which app owns the microphone, so browsers are excluded and the limitation is disclosed in Settings.
+
+### Notes
+
+- Your data lives in Library, then Application Support, then Earshot on the Mac. Recordings, notes and settings stay on your computer, same as on Windows.
+- Mac builds are made to ship Developer ID signed, notarized by Apple and checked by Gatekeeper before publishing. Until Earshot's Apple Developer enrollment completes, downloads are unsigned: macOS will ask you to allow the app once under System Settings, then Privacy and Security, then Open Anyway. Unsigned builds also skip in-place auto-update (the updater only replaces a signed app with a matching signed newer one), so grab new versions from the releases page until then.
+- Everything else carries over: transcription providers, AI notes, projects, Ask Earshot, integrations, share links and Earshot Plus.
+
 ## [0.34.0] — 2026-07-13 · Share meetings with a link, faster action-item cleanup
 
 ### Added
@@ -432,7 +464,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/), and the proj
 - Note templates per meeting type (Sales call, Standup, 1:1…) that steer the AI notes; pick one on the recording screen. Manage them in Settings → AI.
 - Full-text search across transcripts, notes, attendees and agendas — not just titles.
 - Saved AI actions: one-click prompts (e.g. "Draft a follow-up email", "List the decisions") you can run on any finished meeting from its page.
-- Bookmarks: flag key moments while recording with the button or Ctrl+B, then jump straight to them from the transcript.
+- Bookmarks: flag key moments while recording with the button or the native B shortcut (Ctrl+B on Windows, Command+B on Mac), then jump straight to them from the transcript.
 - Import existing audio or video files and transcribe + summarise them like a recording.
 - Talk-time analytics: an approximate "you vs them" split shown on each meeting.
 - This What's-new / changelog view, here in Settings → About.

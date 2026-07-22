@@ -6,15 +6,15 @@
 
 **AI meeting notes. No bot in your call.**
 
-A local-first meeting recorder and AI note-taker for Windows — it records both
-sides of any call on your PC, transcribes them, and writes the notes, action
+A local-first meeting recorder and AI note-taker for Windows and macOS — it records both
+sides of any call on your computer, transcribes them, and writes the notes, action
 items and answers. Nothing joins your meeting, and no cloud touches your audio
 unless you choose one.
 
 [![Latest release](https://img.shields.io/github/v/release/haydenw22/earshot-meeting-notes?label=download&color=6366F1)](https://github.com/haydenw22/earshot-meeting-notes/releases/latest)
 [![CI](https://github.com/haydenw22/earshot-meeting-notes/actions/workflows/ci.yml/badge.svg)](https://github.com/haydenw22/earshot-meeting-notes/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/haydenw22/earshot-meeting-notes?color=22C55E)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)](https://github.com/haydenw22/earshot-meeting-notes/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20%7C%20macOS%2014.4%2B-0078D6)](https://github.com/haydenw22/earshot-meeting-notes/releases/latest)
 [![Website](https://img.shields.io/badge/web-tryearshot.app-A855F7)](https://tryearshot.app)
 
 <img src="docs/screenshots/home_dark.png" width="850" alt="Earshot home — meetings, projects and the to-do rail">
@@ -23,9 +23,13 @@ unless you choose one.
 
 ## Get it
 
-- **[Download the installer](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/EarshotSetup.exe)**
+- **Windows:** [download the installer](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/EarshotSetup.exe)
   (Windows 10/11, 64-bit). SmartScreen may warn — the installer is new and
   unsigned; it's built from the source in this repo. *More info → Run anyway.*
+- **Mac:** [download the disk image](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/Earshot.dmg)
+  (Apple Silicon, macOS 14.4 or newer), open it and drag Earshot to Applications.
+  Production Mac releases are Developer ID signed and notarized by Apple. The
+  first recording asks for Microphone and System Audio Recording permission.
 - A first-run **setup guide** walks you through the choice:
   - **Self-host — free forever.** Bring your own keys (Groq's free tier
     transcribes generously; any Anthropic / OpenAI-compatible / local model
@@ -91,12 +95,24 @@ guides: [recording consent laws](https://tryearshot.app/recording-consent-laws)
 
 ## Self-host quickstart (from source)
 
-Requirements: Windows 10/11, **Python 3.12**.
+Requirements: **Python 3.12**, plus either Windows 10/11 or an Apple Silicon Mac
+running macOS 14.4 or newer. Mac builds also need the Xcode command-line tools.
+
+Windows:
 
 ```sh
 py -3.12 -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.lock.txt   # pinned, known-good
 .venv/Scripts/python main.py
+```
+
+macOS:
+
+```sh
+python3.12 -m venv .venv-mac
+.venv-mac/bin/python -m pip install -r requirements.lock.macos.txt
+sh packaging/mac/audiotap/build.sh
+.venv-mac/bin/python main.py
 ```
 
 The setup guide runs on first launch. For transcription, point it at one of:
@@ -116,7 +132,8 @@ Read [SECURITY.md](SECURITY.md) for the full policy and threat model. The short
 version:
 
 - **Local by default.** Audio, transcripts, notes and the SQLite library live
-  under `%LOCALAPPDATA%\Earshot\`. Nothing leaves your machine except the
+  under `%LOCALAPPDATA%\Earshot\` on Windows or
+  `~/Library/Application Support/Earshot/` on macOS. Nothing leaves your machine except the
   providers **you** configure and the optional webhook.
 - **Keys are stored in plaintext** in `config.json` (like most local dev
   tools). Prefer the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPGRAM_API_KEY`
@@ -132,6 +149,8 @@ version:
   published with the release, over HTTPS from GitHub.
 
 ## Development
+
+Windows:
 
 ```sh
 # smoke-test the audio hardware (no GUI)
@@ -151,6 +170,20 @@ powershell -ExecutionPolicy Bypass -File "packaging\build_and_install.ps1"
 
 Distributable installer: install [Inno Setup](https://jrsoftware.org/isdl.php),
 then `iscc packaging\installer.iss`.
+
+macOS test/build commands:
+
+```sh
+QT_QPA_PLATFORM=cocoa .venv-mac/bin/python tests/test_ui_smoke.py
+.venv-mac/bin/python tests/test_capture_mac.py
+sh packaging/mac/audiotap/build.sh
+.venv-mac/bin/python -m PyInstaller packaging/earshot_mac.spec --noconfirm --clean
+sh packaging/mac/make_dmg.sh
+```
+
+Tagged Mac releases fail unless Developer ID signing and notarization credentials
+are configured. CI verifies the bundle signature, Gatekeeper acceptance, stapled
+notarization ticket, architecture, metadata, DMG integrity and packaged launch.
 
 <details>
 <summary><b>Project layout</b></summary>

@@ -15,6 +15,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,9 +51,26 @@ def test_spool_write_error_latched():
     s = object.__new__(capture._Stream)
     s.channels, s.rate, s.level, s.write_error = 1, 48000, 0.0, None
     s._file = _BadFile()
+    if sys.platform == "darwin":
+        from meeting_notes.audio._capture_mac import _AudioBlock
+
+        s._free = deque([_AudioBlock(4096)])
+        s._ready = deque()
+        s._wake = threading.Event()
+        s._stopping = False
+        s._dropped_blocks = 0
+        s._callback_issue = None
+        s._writer = threading.Thread(target=s._write_loop, daemon=True)
+        s._writer.start()
     ret = s._cb(b"\x00\x20" * 480, 480, None, None)
-    check("callback survives the write failure and keeps capturing",
-          ret == (None, capture.pyaudio.paContinue))
+    if sys.platform == "win32":
+        expected = (None, capture.pyaudio.paContinue)
+    else:
+        expected = None  # sounddevice callbacks return nothing
+    deadline = time.monotonic() + 2
+    while s.write_error is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    check("callback survives the write failure and keeps capturing", ret == expected)
     check("write error latched with the OS reason",
           bool(s.write_error) and "No space left" in s.write_error)
     check("level meter still updates (the deceptive healthy look the UI must override)",
@@ -58,6 +78,10 @@ def test_spool_write_error_latched():
     first = s.write_error
     s._cb(b"\x00\x20" * 480, 480, None, None)
     check("first failure stays latched (not overwritten)", s.write_error == first)
+    if sys.platform == "darwin":
+        s._stopping = True
+        s._wake.set()
+        s._writer.join(timeout=2)
 
     rec = object.__new__(capture.DualStreamRecorder)
     rec._mic, rec._loop = s, SimpleNamespace(write_error=None)
@@ -82,7 +106,7 @@ def test_delete_meeting_honest():
     m = repo.create(date_text="d", date_iso="2026-07-13", attendees=[])
     repo.update(m.id, audio_dir=str(folder), status="Done")
 
-    with open(wav, "rb"):  # Windows: an open handle blocks deletion
+    def assert_delete_blocked():
         result = delete_meeting(repo, m.id)
         check("locked file -> deletion reports failure", not result.ok)
         check("failure names the folder still holding files", result.folder == str(folder))
@@ -90,7 +114,17 @@ def test_delete_meeting_honest():
               any(mm.id == m.id for mm in repo.list()))
         check("folder still exists on disk", folder.exists())
 
-    result = delete_meeting(repo, m.id)  # handle released -> retry succeeds
+    if sys.platform == "win32":
+        with open(wav, "rb"):  # Windows: an open handle blocks deletion
+            assert_delete_blocked()
+    else:
+        folder.chmod(0o500)  # POSIX: a read-only dir blocks removing its contents
+        try:
+            assert_delete_blocked()
+        finally:
+            folder.chmod(0o700)
+
+    result = delete_meeting(repo, m.id)  # lock released -> retry succeeds
     check("retry after unlock succeeds", result.ok)
     check("meeting row removed", not any(mm.id == m.id for mm in repo.list()))
     check("folder removed", not folder.exists())

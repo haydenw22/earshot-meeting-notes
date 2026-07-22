@@ -1,12 +1,14 @@
 """Filesystem locations for app data, recordings, config and the database.
 
-Everything user-generated lives under %LOCALAPPDATA%\\Earshot so it survives app
-reinstalls and never pollutes the source tree.
+Everything user-generated lives under the per-user app-data folder
+(%LOCALAPPDATA%\\Earshot on Windows, ~/Library/Application Support/Earshot on
+macOS) so it survives app reinstalls and never pollutes the source tree.
 """
 from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -18,19 +20,47 @@ _LEGACY_DIR_NAMES = ("MeetingNotes",)  # pre-rename data dirs to migrate from
 _recordings_override: Optional[Path] = None
 
 
+def _looks_like_earshot_data(path: Path) -> bool:
+    """Require an Earshot marker before adopting a generically named folder."""
+    return any((path / name).exists() for name in ("meetings.db", "config.json", "recordings"))
+
+
 def set_recordings_dir(path) -> None:
     global _recordings_override
     _recordings_override = Path(path) if path else None
 
 
+def _base_dir() -> Path:
+    """Per-user base folder that app_data_dir() lives inside. LOCALAPPDATA wins
+    on every platform when set: it is always set on real Windows, and tests and
+    tools point it at a temp dir to isolate themselves on any OS."""
+    env = os.environ.get("LOCALAPPDATA")
+    if env:
+        return Path(env)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support"
+    return Path(os.path.expanduser("~"))
+
+
 def app_data_dir() -> Path:
     """Root directory for all persistent app data (migrates a legacy folder once)."""
-    base = Path(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"))
+    base = _base_dir()
     d = base / APP_DIR_NAME
     if not d.exists():
-        for legacy in _LEGACY_DIR_NAMES:
-            old = base / legacy
-            if not old.exists():
+        legacy_dirs = [base / name for name in _LEGACY_DIR_NAMES]
+        if sys.platform == "darwin" and not os.environ.get("LOCALAPPDATA"):
+            # A pre-port dev run had no LOCALAPPDATA and fell back to ~/Earshot;
+            # adopt that data into the proper macOS location. (Skipped when a
+            # test has pointed LOCALAPPDATA at a temp dir, so tests can never
+            # swallow a real ~/Earshot.)
+            legacy_dirs.append(Path.home() / APP_DIR_NAME)
+        for old in legacy_dirs:
+            if old == d or not old.exists():
+                continue
+            if (sys.platform == "darwin" and old == Path.home() / APP_DIR_NAME
+                    and not _looks_like_earshot_data(old)):
+                # `~/Earshot` is a generic user-chosen name. Never move an
+                # unrelated folder merely because it happens to match ours.
                 continue
             try:
                 old.rename(d)  # fast path: same volume, keeps meetings + DB

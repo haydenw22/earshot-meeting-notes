@@ -1,4 +1,5 @@
 .venv/
+.venv-mac/
 __pycache__/
 *.pyc
 *.pyo
@@ -22,3 +23,6 @@ build/
 dist/
 *.spec.bak
 .claude/
+packaging/mac/bin/
+.DS_Store
+**/.DS_Store
