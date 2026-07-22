@@ -19,6 +19,28 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.35.2", "2026-07-22", "Earshot for Mac: first public build",
+        (
+            ("Fixed", (
+                "A brief system hiccup during a long Mac recording no longer "
+                "raises a permanent \"audio is being lost\" alarm. Earshot now "
+                "watches the capture heal itself: when audio flows cleanly for "
+                "ten seconds after a momentary drop, the warning clears on its "
+                "own. Real problems, like a full disk or the capture helper "
+                "dying, still stay on screen and are stamped on the meeting.",
+                "The system audio helper logs every capture hiccup with detail "
+                "to audiotap.log inside the meeting folder, so a recording "
+                "problem can be diagnosed after the fact.",
+            )),
+            ("Notes", (
+                "This is the first published Mac build. See 0.35.0 below for "
+                "everything the Mac version brings: native Apple Silicon app, "
+                "microphone plus system audio capture, verified updates, call "
+                "detection and the same local-first library as Windows.",
+            )),
+        ),
+    ),
+    Release(
         "0.35.1", "2026-07-20", "Renewal dates show their year",
         (
             ("Fixed", (
@@ -56,8 +78,14 @@ RELEASES: tuple[Release, ...] = (
                 "Your data lives in Library, then Application Support, then Earshot "
                 "on the Mac. Recordings, notes and settings stay on your computer, "
                 "same as on Windows.",
-                "Production Mac downloads are Developer ID signed, notarized by Apple "
-                "and checked by Gatekeeper before the release is published.",
+                "Mac builds are made to ship Developer ID signed, notarized by "
+                "Apple and checked by Gatekeeper before publishing. Until "
+                "Earshot's Apple Developer enrollment completes, downloads are "
+                "unsigned: macOS will ask you to allow the app once under "
+                "System Settings, then Privacy and Security, then Open Anyway. "
+                "Unsigned builds also skip in-place auto-update (the updater "
+                "only replaces a signed app with a matching signed newer one), "
+                "so grab new versions from the releases page until then.",
                 "Everything else carries over: transcription providers, AI notes, "
                 "projects, Ask Earshot, integrations, share links and Earshot Plus.",
             )),

@@ -118,13 +118,24 @@ jobs:
           pip install -r requirements.lock.macos.txt
           pip install pyinstaller==6.21.0
 
+      # Tagged releases fail closed without Developer ID + notarization
+      # secrets UNLESS the repo variable ALLOW_UNSIGNED_MAC_RELEASE is "true":
+      # a deliberate, recorded decision to ship an unsigned build (users get
+      # Gatekeeper's Open Anyway flow, documented in the release notes).
+      # Delete the variable once the Apple Developer secrets exist.
       - name: Require Developer ID signing + notarization for tagged releases
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          ALLOW_UNSIGNED: ${{ vars.ALLOW_UNSIGNED_MAC_RELEASE }}
         run: |
           missing=0
           for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD MACOS_CODESIGN_IDENTITY APPLE_NOTARY_ID APPLE_NOTARY_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!name}" ]; then echo "::error::Required release secret $name is missing"; missing=1; fi
           done
+          if [ "$missing" = "1" ] && [ "$ALLOW_UNSIGNED" = "true" ]; then
+            echo "::warning::Shipping an UNSIGNED macOS build (ALLOW_UNSIGNED_MAC_RELEASE=true). Users must approve it via System Settings > Privacy & Security > Open Anyway."
+            missing=0
+          fi
           exit "$missing"
 
       - name: Verify tag matches __version__ (tags only)
@@ -192,8 +203,12 @@ jobs:
         run: |
           codesign --verify --deep --strict --verbose=2 dist/Earshot.app
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            xcrun stapler validate dist/Earshot.app
-            spctl --assess --type execute --verbose=4 dist/Earshot.app
+            if [ -n "$MACOS_CODESIGN_IDENTITY" ]; then
+              xcrun stapler validate dist/Earshot.app
+              spctl --assess --type execute --verbose=4 dist/Earshot.app
+            else
+              echo "::warning::Unsigned build: skipping notarization staple + Gatekeeper assessment (ad-hoc signature verified above)."
+            fi
           fi
 
       # Earshot-mac.zip is the auto-update payload (ditto preserves the bundle
