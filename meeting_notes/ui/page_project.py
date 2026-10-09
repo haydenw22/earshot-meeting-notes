@@ -178,13 +178,16 @@ class ProjectPage(QWidget):
         for name, hexcolor in FOLDER_COLORS:
             act = color_menu.addAction(self.shell._color_icon(hexcolor), name)
             color_actions[act] = hexcolor
+        sync_act = self.shell.add_sync_toggle_action(menu, folder)
         menu.addSeparator()
         delete_act = menu.addAction(icons.icon("trash", self.theme.color("danger"), 15), "Delete project")
 
         chosen = menu.exec(self.manage_btn.mapToGlobal(QPoint(0, self.manage_btn.height())))
         if chosen is None:
             return
-        if chosen is rename_act:
+        if chosen is sync_act:
+            self.shell.toggle_folder_sync(folder)
+        elif chosen is rename_act:
             self.shell._rename_folder(folder.id, folder.name)
         elif chosen is delete_act:
             self.shell._delete_folder(folder.id, folder.name)

@@ -10,7 +10,7 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from . import db as _db
 
@@ -20,6 +20,7 @@ class Folder:
     id: Optional[int] = None
     name: str = ""
     color: str = "#6366F1"
+    sync_excluded: bool = False   # kept out of Cloud sync ("Don't sync this project")
 
 
 @dataclass
@@ -113,13 +114,40 @@ class MeetingRepository:
         "status", "error", "notion_page_id", "notion_synced_at", "folder_id", "share_url",
     })
 
+    # Fields whose change alters what Cloud sync would send (see
+    # integrations/cloud_sync.py); an update touching only others (bookmarks,
+    # audio_dir, error, share_url...) doesn't wake the sync scheduler.
+    _SYNC_FIELDS = frozenset({
+        "title", "date_text", "date_iso", "attendees", "agenda", "template",
+        "transcript", "notes_json", "duration_secs", "status", "folder_id",
+    })
+
     def __init__(self, conn: Optional[sqlite3.Connection] = None):
         self.conn = conn or _db.connect()
         _db.init_db(self.conn)
         # Reentrant: reads/writes share one connection across the UI + worker
         # threads, so every access is serialised through this lock.
         self._lock = threading.RLock()
+        # change listeners: called (from whichever thread wrote) after any
+        # meeting/folder change that could matter to Cloud sync. Must be cheap.
+        self._listeners: list[Callable[[], None]] = []
         self._backfill_fts()
+
+    def add_change_listener(self, fn: Callable[[], None]) -> None:
+        self._listeners.append(fn)
+
+    def remove_change_listener(self, fn: Callable[[], None]) -> None:
+        try:
+            self._listeners.remove(fn)
+        except ValueError:
+            pass
+
+    def _changed(self) -> None:
+        for fn in list(self._listeners):
+            try:
+                fn()
+            except Exception:
+                pass  # a listener must never break a write
 
     def close(self) -> None:
         try:
@@ -141,6 +169,7 @@ class MeetingRepository:
             mid = cur.lastrowid
             m = self.get(mid)
             self._index_fts(m)  # same lock scope: no window for a racing delete
+        self._changed()
         return m
 
     def update(self, meeting_id: int, **fields: Any) -> None:
@@ -172,12 +201,15 @@ class MeetingRepository:
                     self._index_fts(self.get(meeting_id))
                 except KeyError:
                     pass
+        if self._SYNC_FIELDS & set(fields):
+            self._changed()
 
     def delete(self, meeting_id: int) -> None:
         with self._lock:
             self.conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             self.conn.execute("DELETE FROM meetings_fts WHERE meeting_id = ?", (meeting_id,))
             self.conn.commit()
+        self._changed()
 
     # --- folders ---
     def create_folder(self, name: str, color: str) -> Folder:
@@ -188,14 +220,40 @@ class MeetingRepository:
             self.conn.commit()
             fid = cur.lastrowid
             row = self.conn.execute("SELECT * FROM folders WHERE id = ?", (fid,)).fetchone()
-        return Folder(id=row["id"], name=row["name"], color=row["color"])
+        self._changed()
+        return self._folder(row)
+
+    @staticmethod
+    def _folder(r: sqlite3.Row) -> Folder:
+        return Folder(id=r["id"], name=r["name"], color=r["color"],
+                      sync_excluded=bool(dict(r).get("sync_excluded") or 0))
 
     def list_folders(self) -> list[Folder]:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT * FROM folders ORDER BY name COLLATE NOCASE"
             ).fetchall()
-        return [Folder(id=r["id"], name=r["name"], color=r["color"]) for r in rows]
+        return [self._folder(r) for r in rows]
+
+    def set_folder_sync_excluded(self, folder_id: int, excluded: bool) -> None:
+        """Keep a folder's meetings out of Cloud sync (True) or let them sync
+        again (False). The next sync removes/adds their server copies."""
+        with self._lock:
+            self.conn.execute("UPDATE folders SET sync_excluded = ? WHERE id = ?",
+                              (1 if excluded else 0, folder_id))
+            self.conn.commit()
+        self._changed()
+
+    def sync_snapshot(self) -> list[tuple["Meeting", str, bool]]:
+        """Every meeting with its folder name and that folder's sync opt-out, in
+        one read (Cloud sync's view of the library; no row limit)."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT m.*, f.name AS _folder_name, f.sync_excluded AS _folder_excluded "
+                "FROM meetings m LEFT JOIN folders f ON f.id = m.folder_id ORDER BY m.id"
+            ).fetchall()
+        return [(Meeting.from_row(r), r["_folder_name"] or "", bool(r["_folder_excluded"] or 0))
+                for r in rows]
 
     def update_folder(self, folder_id: int, *, name: Optional[str] = None,
                        color: Optional[str] = None) -> None:
@@ -212,6 +270,7 @@ class MeetingRepository:
         with self._lock:
             self.conn.execute(f"UPDATE folders SET {cols} WHERE id = ?", vals)
             self.conn.commit()
+        self._changed()
 
     def delete_folder(self, folder_id: int) -> None:
         with self._lock:
@@ -222,6 +281,7 @@ class MeetingRepository:
             )
             self.conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
             self.conn.commit()
+        self._changed()
 
     # ---------- Ask Earshot chat history ----------
     def create_chat(self, title: str, messages: list) -> int:

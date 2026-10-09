@@ -130,6 +130,17 @@ class Config:
     cloud_email: str = ""                 # signed-in email, for the account card
     onboarding_done: bool = False         # first-run setup wizard already shown/finished
 
+    # --- Cloud sync (Plus): keep a copy of meetings' text on the Earshot account ---
+    # Off by default. Only notes/transcripts/metadata ever leave (never audio);
+    # folders can opt out (folders.sync_excluded). See integrations/cloud_sync.py.
+    cloud_sync_enabled: bool = False
+    cloud_sync_library_id: str = ""       # uuid4 for THIS local library; made on first sync
+    cloud_sync_last_ok: str = ""          # ISO-8601 UTC time of the last successful sync
+    cloud_sync_last_error: str = ""       # friendly message from the last failed sync ("" = none)
+    cloud_sync_count: int = 0             # meetings the account holds for this library
+    cloud_sync_skipped: dict = field(default_factory=dict)  # {"<id>": "<hash>"} too large to send
+    cloud_sync_team: dict = field(default_factory=dict)     # {"name", "members"} from the server
+
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -155,7 +166,8 @@ class Config:
         clean = {k: v for k, v in data.items() if k in known}
         unknown = {k: v for k, v in data.items() if k not in known and k != "extra"}
         # container fields must have the right container type or defaults win
-        for key, want in (("templates", list), ("ai_actions", list), ("extra", dict)):
+        for key, want in (("templates", list), ("ai_actions", list), ("extra", dict),
+                          ("cloud_sync_skipped", dict), ("cloud_sync_team", dict)):
             if key in clean and not isinstance(clean[key], want):
                 del clean[key]
         cfg = cls(**clean)

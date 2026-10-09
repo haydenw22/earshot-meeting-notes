@@ -73,11 +73,21 @@ _MIGRATIONS = {
     "share_url": "ALTER TABLE meetings ADD COLUMN share_url TEXT",
 }
 
+# Same idea for the folders table.
+_FOLDER_MIGRATIONS = {
+    # 1 = keep this folder's meetings out of Cloud sync (default: every folder syncs)
+    "sync_excluded": "ALTER TABLE folders ADD COLUMN sync_excluded INTEGER DEFAULT 0",
+}
+
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     existing = {r[1] for r in conn.execute("PRAGMA table_info(meetings)").fetchall()}
     for col, ddl in _MIGRATIONS.items():
+        if col not in existing:
+            conn.execute(ddl)
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(folders)").fetchall()}
+    for col, ddl in _FOLDER_MIGRATIONS.items():
         if col not in existing:
             conn.execute(ddl)
     conn.commit()

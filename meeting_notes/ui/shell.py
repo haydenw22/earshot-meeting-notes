@@ -122,6 +122,13 @@ class Shell(QMainWindow):
         self.resize(w, h)
         self.setMinimumSize(960, 620)
 
+        # Cloud sync (Plus): background reconcile on startup, after changes and
+        # every 10 min. Created before the pages render so the Account pane can
+        # show its status.
+        from .sync_scheduler import SyncScheduler
+        self.sync = SyncScheduler(repo, cfg, self)
+        self.sync.start()
+
         self.home = HomePage(self, repo, cfg, theme)
         self.record = RecordPage(self, repo, cfg, theme)
         self.detail = DetailPage(self, repo, cfg, theme)
@@ -522,6 +529,7 @@ class Shell(QMainWindow):
             self.settings.refresh_tabs()
         self.refresh_account_card()
         self.refresh_plan_state()
+        self.sync.account_changed()  # sign-out stops syncing; sign-in resumes it
 
     # ---------- sidebar collapse (full sidebar <-> icon rail) ----------
     _RAIL_W = 56
@@ -814,19 +822,32 @@ class Shell(QMainWindow):
 
         self._project_rows = {}
         for f in self.repo.list_folders():
-            lay.addWidget(self._project_row(f.name, counts.get(f.id, 0), f.id, f.color))
+            lay.addWidget(self._project_row(f.name, counts.get(f.id, 0), f.id, f.color,
+                                            sync_excluded=f.sync_excluded))
         lay.addWidget(self._project_row("Uncategorized", uncat, None, None))
 
         self._apply_folders_collapsed()
         self._sync_project_checks()
 
-    def _project_row(self, name: str, count: int, folder_id, color: str | None) -> QPushButton:
+    def _project_row(self, name: str, count: int, folder_id, color: str | None,
+                     *, sync_excluded: bool = False) -> QPushButton:
         btn = QPushButton(f"  {name}  ({count})".replace("&", "&&"))
         btn.setProperty("variant", "ghost")
         btn.setCheckable(True)
         btn.setMinimumHeight(36)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolTip(name)
+        if sync_excluded:
+            # small "not synced" mark at the row's right edge
+            badge_lay = QHBoxLayout(btn)
+            badge_lay.setContentsMargins(0, 0, 8, 0)
+            badge_lay.addStretch(1)
+            badge = QLabel(btn)
+            badge.setObjectName("SyncOffBadge")
+            badge.setPixmap(icons.pixmap("cloud-off", self.theme.color("text_faint"), 14))
+            badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            badge_lay.addWidget(badge)
+            btn.setToolTip(f"{name} (not synced to your Earshot account)")
         icon_color = color if color else self.theme.color("text_faint")
         btn.setIcon(icons.icon("folder", icon_color, 16))
         btn.clicked.connect(lambda _=False, fid=folder_id: self.show_project(fid))
@@ -893,13 +914,16 @@ class Shell(QMainWindow):
         for name, hexcolor in FOLDER_COLORS:
             act = color_menu.addAction(self._color_icon(hexcolor), name)
             color_actions[act] = hexcolor
+        sync_act = self.add_sync_toggle_action(menu, folder)
         menu.addSeparator()
         delete_act = menu.addAction("Delete project")
 
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
-        if chosen is rename_act:
+        if chosen is sync_act:
+            self.toggle_folder_sync(folder)
+        elif chosen is rename_act:
             self._rename_folder(folder_id, folder.name)
         elif chosen is delete_act:
             self._delete_folder(folder_id, folder.name)
@@ -911,6 +935,19 @@ class Shell(QMainWindow):
         elif chosen in color_actions:
             self.repo.update_folder(folder_id, color=color_actions[chosen])
             self.notify_data_changed()
+
+    @staticmethod
+    def add_sync_toggle_action(menu: QMenu, folder):
+        """The project menu's Cloud sync opt-out. Shown as a plain action (not a
+        checkable one: QMenu's check indicator renders badly next to icons)."""
+        text = "Sync this project again" if folder.sync_excluded else "Don't sync this project"
+        act = menu.addAction(text)
+        act.setToolTip("Cloud sync keeps a copy of meetings on your Earshot account.")
+        return act
+
+    def toggle_folder_sync(self, folder) -> None:
+        self.repo.set_folder_sync_excluded(folder.id, not folder.sync_excluded)
+        self.notify_data_changed()
 
     @staticmethod
     def _color_icon(hexcolor: str) -> QIcon:
@@ -1038,4 +1075,5 @@ class Shell(QMainWindow):
         from . import update_dialog
         update_dialog.shutdown()  # join any cancelled installer download too
         workers.join_all()
+        self.sync.shutdown()
         event.accept()

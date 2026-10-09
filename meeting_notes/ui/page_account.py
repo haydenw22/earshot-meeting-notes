@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import webbrowser
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -29,6 +31,12 @@ from . import icons
 from .widgets import Card, clear_layout, make_chip
 
 LEARN_MORE_URL = "https://tryearshot.app"
+
+SYNC_TOGGLE_TEXT = "Sync meetings to your Earshot account"
+SYNC_EXPLAINER = (
+    "Keeps a copy of your meetings' notes and transcripts (never audio) on your Earshot "
+    "account, so your team and Claude can search them. Turn a project's sync off from its menu."
+)
 
 PLUS_PITCH = [
     "Managed transcription — no home server or API keys to set up.",
@@ -56,6 +64,18 @@ class AccountPage(QWidget):
         self.theme = theme
         self._me_worker = None
         self._build()
+        sync = self._sync
+        if sync is not None:
+            sync.status_changed.connect(self._refresh_sync_status)
+        # keep "Last synced 2 min ago" honest while the page is open
+        self._sync_tick = QTimer(self)
+        self._sync_tick.setInterval(30_000)
+        self._sync_tick.timeout.connect(self._refresh_sync_status)
+        self._sync_tick.start()
+
+    @property
+    def _sync(self):
+        return getattr(self.shell, "sync", None)
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
@@ -90,12 +110,14 @@ class AccountPage(QWidget):
         # now deleted C++ objects, so touching them (e.g. from apply_theme) would
         # raise. Whichever card is rebuilt below re-sets the ones it owns.
         for attr in ("subscribe_btn", "learn_btn", "billing_btn", "signout_btn",
-                     "usage_bar", "usage_lbl", "renewal_lbl", "status_chip_holder"):
+                     "usage_bar", "usage_lbl", "renewal_lbl", "status_chip_holder",
+                     "sync_toggle", "sync_status_lbl", "sync_now_btn"):
             if hasattr(self, attr):
                 delattr(self, attr)
         lay.addWidget(self._profile_card())
         if self.cfg.account_mode == "cloud":
             lay.addWidget(self._subscription_card())
+            lay.addWidget(self._sync_card())
         else:
             lay.addWidget(self._plus_card())
         lay.addWidget(self._data_card())
@@ -353,6 +375,82 @@ class AccountPage(QWidget):
     def _manage_billing(self) -> None:
         self._open_url(self._billing_url)
 
+    # ---------- Cloud sync (cloud mode) ----------
+    def _sync_card(self) -> Card:
+        card, cl = self._card("Cloud sync")
+        self.sync_toggle = QCheckBox(SYNC_TOGGLE_TEXT)
+        self.sync_toggle.setChecked(bool(self.cfg.cloud_sync_enabled))
+        self.sync_toggle.toggled.connect(self._on_sync_toggled)
+        cl.addWidget(self.sync_toggle)
+        explain = QLabel(SYNC_EXPLAINER)
+        explain.setObjectName("Muted")
+        explain.setWordWrap(True)
+        cl.addWidget(explain)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.sync_status_lbl = QLabel("")
+        self.sync_status_lbl.setObjectName("Faint")
+        self.sync_status_lbl.setWordWrap(True)
+        row.addWidget(self.sync_status_lbl, 1)
+        self.sync_now_btn = QPushButton("Sync now")
+        self.sync_now_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sync_now_btn.clicked.connect(self._sync_now)
+        row.addWidget(self.sync_now_btn, 0, Qt.AlignmentFlag.AlignTop)
+        cl.addLayout(row)
+        self._refresh_sync_status()
+        return card
+
+    def _refresh_sync_status(self) -> None:
+        if not hasattr(self, "sync_status_lbl"):
+            return  # self-host mode: no sync card
+        from ..integrations import cloud_sync
+        sync = self._sync
+        running = bool(sync is not None and sync.running)
+        self.sync_status_lbl.setText(cloud_sync.status_line(self.cfg, running=running))
+        self.sync_now_btn.setEnabled(bool(self.cfg.cloud_sync_enabled) and not running)
+        if self.sync_toggle.isChecked() != bool(self.cfg.cloud_sync_enabled):
+            self.sync_toggle.blockSignals(True)
+            self.sync_toggle.setChecked(bool(self.cfg.cloud_sync_enabled))
+            self.sync_toggle.blockSignals(False)
+
+    def _on_sync_toggled(self, on: bool) -> None:
+        remove = False
+        if not on:
+            remove = self._ask_remove_copies()
+        self.cfg.cloud_sync_enabled = bool(on)
+        if on:
+            self.cfg.cloud_sync_last_error = ""
+        self.cfg.save()
+        sync = self._sync
+        if sync is not None:
+            sync.account_changed()
+            if on:
+                sync.sync_now()
+            elif remove:
+                sync.request_delete_all()
+        self._refresh_sync_status()
+
+    def _ask_remove_copies(self) -> bool:
+        """Turning sync off: also delete the copies already on the account?
+        (Split out so tests can answer without a modal.)"""
+        if not (self.cfg.cloud_sync_library_id or "").strip():
+            return False  # never synced: nothing to remove
+        answer = QMessageBox.question(
+            self, "Turn off Cloud sync",
+            "Sync is now off. Also remove the copies of your meetings that are already "
+            "on your Earshot account? Your meetings on this computer are not affected.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _sync_now(self) -> None:
+        sync = self._sync
+        if sync is not None and self.cfg.cloud_sync_enabled:
+            sync.sync_now()
+        self._refresh_sync_status()
+
     def _sign_out(self) -> None:
         # Sign out LOCALLY and instantly — the server-side revoke is best-effort
         # and runs off the GUI thread, so an unreachable server can't freeze the
@@ -361,6 +459,9 @@ class AccountPage(QWidget):
         self.cfg.cloud_token = ""
         self.cfg.cloud_email = ""
         self.cfg.account_mode = "selfhost"
+        # signing out just stops syncing: the account keeps its copies, and
+        # sync stays off until the user turns it on again after signing in
+        self.cfg.cloud_sync_enabled = False
         self.cfg.save()
         if token:
             from .workers import FuncWorker
@@ -383,6 +484,12 @@ class AccountPage(QWidget):
         line.setObjectName("Muted")
         line.setWordWrap(True)
         cl.addWidget(line)
+        if self.cfg.account_mode == "cloud" and self.cfg.cloud_sync_enabled:
+            synced = QLabel("Cloud sync is on, so a copy of your notes and transcripts (never "
+                            "audio) is also kept on your Earshot account.")
+            synced.setObjectName("Muted")
+            synced.setWordWrap(True)
+            cl.addWidget(synced)
         open_btn = QPushButton("Open storage folder")
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.clicked.connect(self._open_storage_folder)

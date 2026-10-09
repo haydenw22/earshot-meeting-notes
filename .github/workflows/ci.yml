@@ -52,6 +52,7 @@ jobs:
           python tests/test_pages.py
           python tests/test_cloud.py
           python tests/test_share_link.py
+          python tests/test_cloud_sync.py
           python tests/test_onboarding.py
           python tests/test_updater.py
           python tests/test_updater_mac.py
@@ -109,6 +110,7 @@ jobs:
           python tests/test_pages.py
           python tests/test_cloud.py
           python tests/test_share_link.py
+          python tests/test_cloud_sync.py
           python tests/test_onboarding.py
           python tests/test_updater.py
           python tests/test_updater_mac.py

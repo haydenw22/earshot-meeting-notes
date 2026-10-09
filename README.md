@@ -126,6 +126,27 @@ Notes/Q&A take an Anthropic key, any OpenAI-compatible endpoint, or a fully
 local model (Ollama, LM Studio) — on that setup your meetings never leave your
 machine.
 
+## Cloud sync (Earshot Plus)
+
+Cloud sync keeps a copy of your meetings on your Earshot account so your team,
+and Claude through the Earshot connector, can search them. It is off until you
+turn it on in **Settings, Account, Cloud sync**.
+
+- **What is sent:** each meeting's title, date, attendees, agenda, transcript,
+  notes, project name, duration, status and template, once the meeting has a
+  transcript or notes.
+- **What is never sent:** audio, recording folders, bookmarks, public share
+  links and Ask Earshot chats.
+- **Keep a project private:** right-click it in the sidebar (or use its menu on
+  the project page) and choose **Don't sync this project**. Its meetings are
+  removed from your account on the next sync, and the project shows a cloud-off
+  mark. Meetings in Uncategorized always sync while sync is on.
+- **When it runs:** shortly after Earshot opens, a few seconds after you change a
+  meeting or project, every ten minutes, and when you press **Sync now**. It runs
+  in the background and never holds up recording or transcription.
+- **Turning it off** asks whether to also remove the copies on your account.
+  Signing out just stops syncing and leaves the copies in place.
+
 ## Security & privacy
 
 Read [SECURITY.md](SECURITY.md) for the full policy and threat model. The short
@@ -134,7 +155,8 @@ version:
 - **Local by default.** Audio, transcripts, notes and the SQLite library live
   under `%LOCALAPPDATA%\Earshot\` on Windows or
   `~/Library/Application Support/Earshot/` on macOS. Nothing leaves your machine except the
-  providers **you** configure and the optional webhook.
+  providers **you** configure, the optional webhook and, if you turn it on,
+  Cloud sync (text only, never audio).
 - **Keys are stored in plaintext** in `config.json` (like most local dev
   tools). Prefer the `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPGRAM_API_KEY`
   environment variables on shared machines.
@@ -195,7 +217,7 @@ meeting_notes/
   transcription/ whisper_client, openai_client, deepgram_client, earshot_client, service, merge, chunker
   notes/         schema, anthropic_client, openai_llm, earshot_llm, actions, render, share
   qa/            ask (two-pass Q&A with verified citations)
-  integrations/  todoist, webhook
+  integrations/  todoist, webhook, cloud_sync
   storage/       db, repository (SQLite + FTS5)
   pipeline/      processing
   ui/            shell + pages, onboarding, overlay, theme, workers

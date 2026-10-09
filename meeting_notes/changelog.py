@@ -19,6 +19,31 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        "0.36.0", "2026-10-09", "Cloud sync for your team",
+        (
+            ("Added", (
+                "Cloud sync (Earshot Plus): turn on \"Sync meetings to your Earshot "
+                "account\" in Settings, Account to keep a copy of your meetings' "
+                "notes and transcripts on your account, so your team and Claude can "
+                "search them. Audio never leaves this computer. Sync is off until "
+                "you turn it on.",
+                "Sync runs quietly in the background: shortly after Earshot opens, a "
+                "few seconds after you change a meeting or project, and every ten "
+                "minutes. It never slows down recording or transcription. The "
+                "Account page shows when it last synced and has a Sync now button.",
+                "Keep a project private with \"Don't sync this project\" in its menu. "
+                "Its meetings are removed from your account on the next sync and the "
+                "project shows a small cloud-off mark in the sidebar.",
+                "Turning sync off asks whether to also remove the copies already on "
+                "your account. Signing out just stops syncing and leaves them there.",
+                "Ask Claude about your meetings: create a Claude token on your account "
+                "page at tryearshot.app/account and add Earshot to Claude Code with the "
+                "command shown there. Claude can search your meetings and your team's, "
+                "and read their notes, action items and transcripts.",
+            )),
+        ),
+    ),
+    Release(
         "0.35.3", "2026-07-22", "Icons render correctly on Retina Macs",
         (
             ("Fixed", (
