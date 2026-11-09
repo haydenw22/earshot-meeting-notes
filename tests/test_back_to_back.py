@@ -160,9 +160,12 @@ def main() -> int:
               page.attendees.text() == "" and page.meeting_id is None)
         check("A keeps its own attendees", repo.get(a).attendees == ["Alice"])
         check("A's audio is saved quickly", wait_for(app, lambda: not page._saving))
-        check("the page is ready for the next meeting while A transcribes",
-              page.record_btn.isEnabled() and page.record_btn.text() == "Start recording"
-              and repo.get(a).status == "Transcribing")
+        check("the page is ready for the next meeting",
+              page.record_btn.isEnabled() and page.record_btn.text() == "Start recording")
+        # the background worker flips the status on its own thread; on a slow
+        # CI runner that can land a moment after the save completes
+        check("A transcribes in the background",
+              wait_for(app, lambda: repo.get(a).status == "Transcribing"))
         check("a new call can be offered while A transcribes", not page.is_recording())
         check("but quitting still waits for A", page.is_busy())
 
@@ -175,7 +178,7 @@ def main() -> int:
         b = page.meeting_id
         check("B is recording", b not in (None, a) and page.recorder.running)
 
-        release[a].set()  # A's notes finish mid-B
+        release.setdefault(a, threading.Event()).set()  # A's notes finish mid-B
         check("A finishes", wait_for(app, lambda: repo.get(a).status == "Done" and not page._processing.get(a)))
         check("finishing A doesn't navigate away from B's recording", shell.opened == [])
         check("finishing A doesn't detach the page from B",
