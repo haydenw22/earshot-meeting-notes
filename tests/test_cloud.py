@@ -318,6 +318,54 @@ def main() -> int:
         earshot_llm.httpx.post = orig_llm_post
 
     # ---------------------------------------------------------------
+    print("== keep-alive: padded 200 bodies + errors streamed inside the 200 ==")
+    # The server pads /v1/notes|ask|action with whitespace while the model runs
+    # (Cloudflare drops 125 s of silence). Real httpx.Response, not _Resp, so the
+    # padding goes through httpx's own JSON decoding.
+    pad = b" " * 9
+    notes_json = (b'{"title": "Sync", "summary": "We synced.", "attendees": [], '
+                  b'"action_items": [], "sections": []}')
+    earshot_llm.httpx.post = lambda url, headers=None, json=None, timeout=None: httpx.Response(
+        200, content=pad + notes_json)
+    try:
+        check("whitespace-padded notes body parses",
+              nservice.generate_notes("hello team", ccfg).title == "Sync")
+    finally:
+        earshot_llm.httpx.post = orig_llm_post
+
+    timed_out = (b'{"error": {"code": "upstream_error", "message": '
+                 b'"Could not reach the AI provider: The read operation timed out"}}')
+    earshot_llm.httpx.post = lambda url, headers=None, json=None, timeout=None: httpx.Response(
+        200, content=pad + timed_out)
+    try:
+        for label, call in (
+            ("notes", lambda: nservice.generate_notes("hello team", ccfg)),
+            ("action", lambda: nservice.run_action("Summarise", ccfg, transcript="t")),
+            ("ask", lambda: earshot_llm.ask("q", base_url="https://x", token="t", context_blocks=[])),
+        ):
+            try:
+                call()
+                check(f"{label}: error streamed inside a 200 raised", False)
+            except ec.CloudError as e:
+                check(f"{label}: error streamed inside a 200 → AI retry copy", "reaching the AI" in str(e))
+    finally:
+        earshot_llm.httpx.post = orig_llm_post
+
+    for status, content, needle in (
+        (502, timed_out, "reaching the AI"),               # pre-stream failure, AI-worded
+        (524, b"<html>A timeout occurred</html>", "took too long"),  # Cloudflare gave up
+    ):
+        earshot_llm.httpx.post = lambda url, headers=None, json=None, timeout=None: httpx.Response(
+            status, content=content)
+        try:
+            nservice.generate_notes("hello team", ccfg)
+            check(f"notes {status} raised", False)
+        except ec.CloudError as e:
+            check(f"notes {status} → {needle!r}", needle in str(e))
+        finally:
+            earshot_llm.httpx.post = orig_llm_post
+
+    # ---------------------------------------------------------------
     print("== device code + poll shape ==")
 
     def code_post(url, headers=None, json=None, timeout=None):

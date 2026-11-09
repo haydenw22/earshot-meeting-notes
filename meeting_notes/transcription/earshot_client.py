@@ -49,25 +49,37 @@ def _timeout(timeout: Optional[float]) -> httpx.Timeout:
     return httpx.Timeout(timeout, connect=15.0)
 
 
-def _friendly(resp: httpx.Response) -> CloudError:
-    """Map a non-200 proxy response to a friendly CloudError, appending
-    `retry_after_days` for the cap case when the server supplies it."""
+def _friendly(resp: httpx.Response, *, upstream_message: str = "") -> CloudError:
+    """Map a non-200 proxy response to a friendly CloudError."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    return _friendly_body(body, resp.status_code, upstream_message=upstream_message)
+
+
+def _friendly_body(body, status_code: int, *, upstream_message: str = "") -> CloudError:
+    """Map an error-contract body to a friendly CloudError, appending
+    `retry_after_days` for the cap case when the server supplies it. Also used
+    for errors the server streams inside a 200 (see notes/earshot_llm.py).
+    `upstream_message` replaces the transcription-worded upstream_error copy."""
     slug = ""
     server_msg = ""
     retry_after_days = None
-    try:
-        body = resp.json()
-        err = body.get("error") if isinstance(body, dict) else None
-        if isinstance(err, dict):
-            slug = err.get("code") or ""
-            server_msg = err.get("message") or ""
-            retry_after_days = err.get("retry_after_days")
-    except ValueError:
-        pass
-    msg = _SLUG_MESSAGES.get(slug)
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        slug = err.get("code") or ""
+        server_msg = err.get("message") or ""
+        retry_after_days = err.get("retry_after_days")
+    msg = upstream_message if slug == "upstream_error" and upstream_message else _SLUG_MESSAGES.get(slug)
     if msg is None:
-        # unknown slug — fall back to the server's sentence, then a generic line
-        msg = server_msg or f"Earshot Plus returned an error ({resp.status_code})."
+        # unknown slug: fall back to the server's sentence, then a generic line
+        if server_msg:
+            msg = server_msg
+        elif status_code in (504, 524):  # a proxy (nginx / Cloudflare) gave up waiting
+            msg = "Earshot Plus took too long to respond. Please try again."
+        else:
+            msg = f"Earshot Plus returned an error ({status_code})."
     elif slug == "cap_reached" and retry_after_days:
         msg = f"{msg} It resets in {int(retry_after_days)} day(s)."
     return CloudError(msg)

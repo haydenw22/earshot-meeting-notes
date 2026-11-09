@@ -6,7 +6,13 @@ contract in PLAN-plus.md):
   - POST /v1/action → {"text": "..."}.
 
 Everything is validated with the same pydantic model the other providers use, so
-the rest of the app can't tell the difference. Connection errors surface the
+the rest of the app can't tell the difference.
+
+These routes answer 200 straight away and pad the body with whitespace until the
+model finishes (Cloudflare drops a request after 125 s of silence, and an hour
+of meeting takes about that long to summarise). JSON ignores the padding, but a
+failure after that point can't change the status, so it arrives as an
+{"error": {...}} body inside the 200. Connection errors surface the
 "servers aren't live yet" copy so nothing crashes when the base URL is
 unreachable.
 """
@@ -17,8 +23,11 @@ from typing import Optional
 import httpx
 from pydantic import ValidationError
 
-from ..transcription.earshot_client import SERVERS_NOT_LIVE, CloudError, _friendly
+from ..transcription.earshot_client import SERVERS_NOT_LIVE, CloudError, _friendly, _friendly_body
 from .schema import MeetingNotes
+
+# The shared upstream_error copy talks about transcribing; these routes are the AI.
+_AI_UPSTREAM = "Earshot Plus had a temporary problem reaching the AI. Please try again shortly."
 
 
 def _timeout() -> httpx.Timeout:
@@ -45,13 +54,15 @@ def _post_json(base_url: str, token: str, path: str, payload: dict) -> dict:
     except httpx.HTTPError as e:
         raise CloudError(f"Could not reach Earshot Plus: {e}") from e
     if resp.status_code != 200:
-        raise _friendly(resp)
+        raise _friendly(resp, upstream_message=_AI_UPSTREAM)
     try:
         data = resp.json()
     except ValueError as e:
         raise CloudError("Earshot Plus returned an unexpected (non-JSON) response.") from e
     if not isinstance(data, dict):
         raise CloudError("Earshot Plus returned an unexpected response shape.")
+    if isinstance(data.get("error"), dict):
+        raise _friendly_body(data, resp.status_code, upstream_message=_AI_UPSTREAM)
     return data
 
 

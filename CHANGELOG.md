@@ -4,6 +4,13 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.36.1] — 2026-11-09 · Notes for long meetings no longer time out
+
+### Fixed
+
+- Earshot Plus notes for long meetings (about an hour or more) could fail with "Earshot Plus returned an error (502)": the AI takes about two minutes to summarise an hour of conversation, and the connection was being dropped before it finished. The server now keeps the connection alive while it works, so long meetings, Ask Earshot and AI actions are no longer cut off at two minutes.
+- If the AI does fail partway through, Earshot now says so plainly and asks you to try again, instead of showing a confusing error. Messages about AI problems no longer talk about transcribing.
+
 ## [0.36.0] — 2026-10-09 · Cloud sync for your team
 
 ### Added
