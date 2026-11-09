@@ -166,7 +166,11 @@ class RecordPage(QWidget):
         self.theme = theme
         self.recorder: DualStreamRecorder | None = None
         self.meeting_id: int | None = None
-        self.worker: FuncWorker | None = None
+        self.worker: FuncWorker | None = None  # saves the stopped recording's audio
+        self._saving = False  # between Stop and the audio being safely on disk
+        # Transcription + notes for stopped meetings, by meeting id. They run
+        # in the background so the next meeting can start straight away.
+        self._processing: dict[int, FuncWorker] = {}
         self._screen_rec: ScreenRecorder | None = None
         self._record_t0 = 0.0
         self._bookmarks: list[dict] = []
@@ -522,7 +526,7 @@ class RecordPage(QWidget):
     def on_shown(self) -> None:
         self._human_date, self._iso_date = today_pair()
         self.date_label.setText(self._human_date)
-        if not (self.recorder and self.recorder.running):
+        if not self.is_recording():
             self._load_devices()
             self.status_label.setText("")
             templates = self.cfg.templates or []
@@ -583,30 +587,61 @@ class RecordPage(QWidget):
 
     @staticmethod
     def _select(combo: QComboBox, saved, devs) -> None:
-        target = saved or next((d.name for d in devs if d.is_default), None)
-        if not target:
-            return
-        for i in range(combo.count()):
-            d = combo.itemData(i)
-            if d is not None and d.name == target:
-                combo.setCurrentIndex(i)
-                return
+        """Pick the saved device, or the system default when the saved one
+        isn't connected (AirPods in their case), never just the first entry,
+        which can be an iPhone or a meeting app's virtual device."""
+        default = next((d.name for d in devs if d.is_default), None)
+        for target in (saved, default):
+            if not target:
+                continue
+            for i in range(combo.count()):
+                d = combo.itemData(i)
+                if d is not None and d.name == target:
+                    combo.setCurrentIndex(i)
+                    return
 
     # ---------- record lifecycle ----------
     def _toggle(self) -> None:
         if self.recorder and self.recorder.running:
             self._stop()
-        else:
+        elif not self._saving:
             self._start()
 
     def _start(self) -> None:
+        # Never start over a live recording (or one still being saved): the
+        # call prompt's "Record now" can arrive after a manual start.
+        if self.is_recording():
+            return
         mic = self.mic_combo.currentData()
         them = self.them_combo.currentData()
         if mic is None or them is None:
             QMessageBox.warning(self, "Pick devices", "Choose both a microphone and a system-audio device.")
             return
+        # The pickers were filled when this page opened. A headset that has
+        # reconnected since (AirPods back from the case between meetings) has a
+        # new system identity and the old entry can no longer be opened, and any
+        # re-listing may renumber devices, so re-read them now and re-bind both
+        # picks by name right before opening anything.
+        picked_mic, picked_them = mic, them
+        try:
+            mic = dev.resolve_by_name(picked_mic.name, dev.list_input_devices())
+            them = dev.resolve_by_name(picked_them.name, dev.list_loopback_devices())
+        except Exception as e:
+            QMessageBox.critical(self, "Audio error", f"Could not list audio devices:\n{e}")
+            return
+        if mic is None or them is None:
+            gone = picked_mic.name if mic is None else picked_them.name
+            QMessageBox.warning(
+                self, "Device not connected",
+                f"“{gone}” isn't connected right now. Reconnect it, or choose another "
+                "device and start again.")
+            self._load_devices()
+            return
         attendees = _parse_attendees(self.attendees.text())
         agenda = self.agenda.toPlainText().strip()
+        # The page may have been open since yesterday: date the meeting now.
+        self._human_date, self._iso_date = today_pair()
+        self.date_label.setText(self._human_date)
         template = (self.template_combo.currentData() or "") if self.template_box.isVisible() else ""
         folder_data = self.folder_combo.currentData()
         folder_id = folder_data if folder_data != "__new__" else None
@@ -799,7 +834,7 @@ class RecordPage(QWidget):
         # Idle guard: a stale "call ended — Stop & process?" toast (which lives
         # ~30s) can fire this after the user already stopped. Without the guard
         # meeting_dir(None) raises and the record button is left disabled on
-        # "Processing…" forever.
+        # "Saving audio…" forever.
         if self.recorder is None or self.meeting_id is None:
             return
         self.poll.stop()
@@ -809,41 +844,47 @@ class RecordPage(QWidget):
             self.shell.set_recording(False)
         self.input_warning.setVisible(False)
         self.record_btn.setEnabled(False)
-        self.record_btn.setText("Processing…")
+        self.record_btn.setText("Saving audio…")
         self._persist_attendees()
-        if self.meeting_id is not None:
-            self.repo.update(self.meeting_id, agenda=self.agenda.toPlainText().strip())
+        self.repo.update(self.meeting_id, agenda=self.agenda.toPlainText().strip())
         recorder = self.recorder
         self.recorder = None
         mid = self.meeting_id
-        cfg, repo = self.cfg, self.repo
+        # From here the form belongs to the NEXT meeting: edits must not reach
+        # this one's row, and its attendees/agenda must not carry over.
+        self.meeting_id = None
+        self._saving = True
+        self.attendees.clear()
+        self.agenda.clear()
+        self._bookmarks = []
+        self.bookmark_count.setText("")
+        repo = self.repo
         audio_dir = meeting_dir(mid)
         from ..audio import writer as wr
-        from ..pipeline.processing import process_recording
 
         def job(progress):
             write_error = recorder.write_error  # capture before the streams close
-            progress("Finalising audio")
-            spool = recorder.stop()
-            # Streams the spools to WAV block-by-block; the raw spools (the only
-            # copy of the meeting) are deleted only after the WAVs verify.
-            wr.finalize_recording(spool, audio_dir)
-            repo.update(mid, audio_dir=str(audio_dir), duration_secs=spool.duration_secs, status="Recorded")
-            if cfg.auto_transcribe:
-                process_recording(repo, mid, cfg, progress=progress, summarize=cfg.auto_summary)
-            else:
-                progress("Saved — open the meeting to transcribe it when you're ready")
-            if write_error:
-                # the pipeline clears `error` when transcription starts; re-stamp
-                # so the incomplete-audio warning survives on the meeting row
-                repo.update(mid, error=("Recording problem: audio stopped saving for "
-                                        f"{write_error}. The saved audio may be incomplete."))
-            return mid
+            progress("Saving audio")
+            try:
+                spool = recorder.stop()
+                # Streams the spools to WAV block-by-block; the raw spools (the
+                # only copy of the meeting) are deleted only after the WAVs verify.
+                wr.finalize_recording(spool, audio_dir)
+            except Exception as e:
+                # Never leave the row stuck on "Recording". The spool files stay
+                # in the meeting folder and are recovered on the next launch.
+                repo.update(mid, status="Error",
+                            error=f"Saving the recording failed: {e}. Restart Earshot to "
+                                  "recover the audio, then Re-transcribe.")
+                raise
+            repo.update(mid, audio_dir=str(audio_dir), duration_secs=spool.duration_secs,
+                        status="Recorded")
+            return mid, write_error
 
         self.worker = FuncWorker(job)
         self.worker.progress.connect(self.status_label.setText)
-        self.worker.done.connect(self._on_done)
-        self.worker.failed.connect(self._on_failed)
+        self.worker.done.connect(self._on_saved)
+        self.worker.failed.connect(self._on_save_failed)
         self.worker.start()
         self.shell.notify_data_changed()
 
@@ -858,22 +899,86 @@ class RecordPage(QWidget):
         self.live.setVisible(False)
         self.apply_theme()
 
-    def _on_done(self, mid) -> None:
-        self.status_label.setText("Done.")
-        self.meeting_id = None  # editing the next session must not rewrite this one
+    def _on_saved(self, result) -> None:
+        """The stopped meeting's audio is safely on disk: the page is ready for
+        the next meeting while transcription and notes run in the background."""
+        mid, write_error = result
+        self._saving = False
         self._reset_controls()
-        self.attendees.clear()
-        self.agenda.clear()  # fresh form for the next recording
-        self.bookmark_count.setText("")
         self.shell.notify_data_changed()
-        self.shell.open_meeting(int(mid))
+        if not self.cfg.auto_transcribe:
+            self.status_label.setText(
+                "Saved. Open the meeting to transcribe it when you're ready.")
+            if self._idle_and_untouched():
+                self.shell.open_meeting(int(mid))
+            return
+        self.status_label.setText(
+            "Saved. Transcribing in the background; you can start the next recording.")
+        self._process_in_background(int(mid), write_error)
 
-    def _on_failed(self, msg: str) -> None:
-        self.status_label.setText(f"Error: {msg}")
-        self.meeting_id = None
+    def _on_save_failed(self, msg: str) -> None:
+        self._saving = False
         self._reset_controls()
+        self.status_label.setText(f"Error: {msg}")
         self.shell.notify_data_changed()
+        QMessageBox.critical(
+            self, "Saving the recording failed",
+            f"{msg}\n\nThe raw audio is kept. Restart Earshot to recover it, then open "
+            "the meeting and Re-transcribe.")
+
+    def _process_in_background(self, mid: int, write_error) -> None:
+        from ..pipeline.processing import process_recording
+
+        cfg, repo = self.cfg, self.repo
+
+        def job(progress):
+            process_recording(repo, mid, cfg, progress=progress, summarize=cfg.auto_summary)
+            if write_error:
+                # the pipeline clears `error` when transcription starts; re-stamp
+                # so the incomplete-audio warning survives on the meeting row
+                repo.update(mid, error=("Recording problem: audio stopped saving for "
+                                        f"{write_error}. The saved audio may be incomplete."))
+            return mid
+
+        worker = FuncWorker(job)
+        worker.progress.connect(self._background_progress)
+        worker.done.connect(self._on_processed)
+        worker.failed.connect(lambda msg, mid=mid: self._on_process_failed(mid, msg))
+        self._processing[mid] = worker
+        worker.start()
+
+    def _background_progress(self, msg: str) -> None:
+        # A new recording owns the status line; the meeting list shows progress.
+        if not self.is_recording():
+            self.status_label.setText(msg)
+
+    def _idle_and_untouched(self) -> bool:
+        """Nothing in flight on this page and nothing typed for a next meeting,
+        so jumping to the finished meeting interrupts nobody."""
+        return (not self.is_recording() and not self.attendees.text().strip()
+                and not self.agenda.toPlainText().strip())
+
+    def _on_processed(self, mid) -> None:
+        self._processing.pop(int(mid), None)
+        self.shell.notify_data_changed()
+        if self._idle_and_untouched():
+            self.status_label.setText("Done.")
+            self.shell.open_meeting(int(mid))
+        elif not self.is_recording():
+            self.status_label.setText("Notes for your last meeting are ready.")
+
+    def _on_process_failed(self, mid: int, msg: str) -> None:
+        self._processing.pop(mid, None)
+        self.shell.notify_data_changed()
+        if self.is_recording():
+            return  # the meeting row shows the error; don't interrupt this recording
+        self.status_label.setText(f"Error: {msg}")
         QMessageBox.critical(self, "Processing failed", msg)
 
+    def is_recording(self) -> bool:
+        """A recording is live, or a stopped one is still being saved."""
+        return bool((self.recorder and self.recorder.running) or self._saving)
+
     def is_busy(self) -> bool:
-        return bool((self.recorder and self.recorder.running) or (self.worker and self.worker.isRunning()))
+        """Recording, or a stopped meeting is still being transcribed/summarised."""
+        return self.is_recording() or any(w.isRunning() for w in self._processing.values())

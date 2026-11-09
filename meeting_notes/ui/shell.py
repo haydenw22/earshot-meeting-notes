@@ -663,7 +663,9 @@ class Shell(QMainWindow):
 
     # ---------- call auto-detection ----------
     def _on_call_started(self, apps: list) -> None:
-        if not self.cfg.call_detect_enabled or self.record.is_busy():
+        # Only a live recording suppresses the prompt: back-to-back calls
+        # should still be offered while the last meeting is being processed.
+        if not self.cfg.call_detect_enabled or self.record.is_recording():
             return
         from .call_watcher import CallToast
         who = apps[0] if apps else "another app"

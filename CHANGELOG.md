@@ -4,6 +4,25 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] — 2026-11-09 · Back-to-back meetings, and Mac updates without reinstalling
+
+### Added
+
+- Mac updates no longer need a fresh download from the website. Most releases now arrive as a small code update (under 1 MB) that Earshot checks against its own signature, saves next to your meetings and starts the next time it opens. The app itself is never replaced, so macOS keeps your Microphone and System Audio Recording permissions. Releases that change more than Earshot's own code still update the whole app in place, now also on Macs without an Apple-signed build. Getting to this version on a Mac takes one last download from tryearshot.app; after that, updates install from inside Earshot.
+- You can start the next meeting as soon as the last one's audio is saved, a few seconds after you press Stop. Transcription and notes for the previous meeting carry on in the background, and the call prompt offers to record your next call meanwhile.
+
+### Fixed
+
+- On a Mac, starting a second meeting failed until Earshot was quit and reopened when your headset had reconnected in between (AirPods back from the case): macOS gives a reconnected device a new identity and Earshot kept the old one. Earshot now re-reads your audio devices every time you start a recording, and tells you which one is missing if it really is gone.
+- Opening the recording page while the last meeting was still being transcribed let you start a new recording that could then never be stopped, and attendees typed for the new meeting were saved onto the old one. Each meeting now keeps its own details.
+- On a Mac, call detection counted Earshot's own microphone as a call in progress, so "The call seems to have ended" never appeared while recording. It now only counts other apps.
+- On a Mac, a split-second microphone hiccup turned the recording banner red for the rest of the meeting. It now clears after ten seconds of clean audio, like the system audio side already did. A real problem saving audio still stays on screen.
+- When your usual microphone isn't connected, Earshot now picks the system default instead of the first device in the list (which could be your iPhone).
+- A meeting recorded on a page left open overnight got the previous day's date. Meetings are now dated when they start.
+- If saving a recording's audio fails (for example, a full disk), the meeting no longer stays stuck on Recording; it shows the error and the audio is recovered the next time Earshot opens.
+- Re-transcribe and Re-summarise are unavailable while a meeting is still being processed, so two runs can't overwrite each other.
+- Deleting a meeting recorded before you changed the recordings folder now removes its audio too, instead of leaving it on disk. A meeting that is still recording can't be deleted.
+
 ## [0.36.1] — 2026-11-09 · Notes for long meetings no longer time out
 
 ### Fixed

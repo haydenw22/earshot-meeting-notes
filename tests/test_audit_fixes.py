@@ -139,6 +139,31 @@ def test_delete_meeting_honest():
     check("out-of-root folder: row deleted, files untouched",
           result.ok and (outside / "keep.txt").exists())
 
+    # The recordings folder was changed in Settings: older meetings still live
+    # in the OLD location, and deleting one must remove its audio there too
+    # (it used to delete the row and silently leave the audio behind).
+    m3 = repo.create(date_text="d", date_iso="2026-07-13", attendees=[])
+    old_root = Path(tempfile.mkdtemp(prefix="earshot_old_recordings_"))
+    old_folder = old_root / f"meeting_{m3.id:06d}"
+    old_folder.mkdir()
+    (old_folder / "meeting.wav").write_bytes(b"RIFF old audio")
+    repo.update(m3.id, audio_dir=str(old_folder), status="Done")
+    result = delete_meeting(repo, m3.id)
+    check("meeting in a previous recordings folder: audio removed too",
+          result.ok and not old_folder.exists())
+    other = old_root / "meeting_999999"  # someone else's folder name: untouched
+    other.mkdir()
+    m4 = repo.create(date_text="d", date_iso="2026-07-13", attendees=[])
+    repo.update(m4.id, audio_dir=str(other), status="Done")
+    check("a folder named for a different meeting is never removed",
+          delete_meeting(repo, m4.id).ok and other.exists())
+
+    m5 = repo.create(date_text="d", date_iso="2026-07-13", attendees=[])
+    repo.update(m5.id, status="Recording")
+    result = delete_meeting(repo, m5.id)
+    check("a meeting that is still recording is not deleted",
+          not result.ok and any(mm.id == m5.id for mm in repo.list()))
+
 
 # ---------------------------------------------------------------- P2-01 --
 def _three_open_items():

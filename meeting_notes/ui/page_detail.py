@@ -247,8 +247,13 @@ class DetailPage(QWidget):
             "Create a Todoist task for each accepted open action item"
             if has_open else "No accepted open action items to send (keep ✓ suggestions first)"
         )
-        self.act_resummarise.setEnabled(bool(m.transcript))
-        self.act_reprocess.setEnabled(bool(m.audio_dir))
+        # Not while this meeting is still being processed (recordings now
+        # transcribe in the background) or this page's own job is running: two
+        # pipelines on one meeting overwrite each other's audio files mid-upload.
+        busy = (m.status in ("Recording", "Transcribing", "Summarizing")
+                or bool(self.worker and self.worker.isRunning()))
+        self.act_resummarise.setEnabled(bool(m.transcript) and not busy)
+        self.act_reprocess.setEnabled(bool(m.audio_dir) and not busy)
         self.act_folder.setEnabled(bool(m.audio_dir))
         self._populate_move_menu(m)
         self.run_action_btn.setEnabled(bool(m.transcript or m.notes))

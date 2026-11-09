@@ -60,6 +60,57 @@ _MIC_PERMISSION_HINT = (
     "System Settings > Privacy & Security > Microphone, then start the recording again."
 )
 
+# PIDs of running earshot-audiotap helpers, so call detection can tell their
+# capture apart from a real call's (util/mic_usage.py).
+_helper_pids: set[int] = set()
+
+
+def helper_pids() -> set[int]:
+    return set(_helper_pids)
+
+
+# PortAudio snapshots the system's devices once, at initialisation, and keeps
+# the Core Audio object ID of each. A headset that disconnects and reconnects
+# (AirPods back from the case between meetings) comes back under a NEW object
+# ID, so opening it from the stale snapshot fails with PaErrorCode -9986 until
+# the app restarts. Re-initialising PortAudio re-reads the devices, but
+# Pa_Terminate also closes every open stream, so it is only safe while no
+# microphone stream is open; this counter tracks that.
+_pa_lock = threading.Lock()
+_pa_open_streams = 0
+
+
+def refresh_device_list() -> bool:
+    """Re-read the system's audio devices (cheap: a few ms). Skipped, returning
+    False, while a microphone stream is open, since re-initialising PortAudio
+    would close it mid-recording."""
+    with _pa_lock:
+        if _pa_open_streams:
+            return False
+        import sounddevice as sd
+
+        try:
+            sd._terminate()
+        except Exception:
+            pass  # already terminated by an earlier failed refresh: just re-init
+        try:
+            sd._initialize()
+        except Exception:
+            return False
+        return True
+
+
+def _pa_stream_opened() -> None:
+    global _pa_open_streams
+    with _pa_lock:
+        _pa_open_streams += 1
+
+
+def _pa_stream_closed() -> None:
+    global _pa_open_streams
+    with _pa_lock:
+        _pa_open_streams = max(0, _pa_open_streams - 1)
+
 
 def _helper_path() -> str:
     """Locate the earshot-audiotap binary: env override, then the PyInstaller
@@ -151,8 +202,12 @@ class _MicStream:
         # Latched on the first failed spool write (disk full, folder gone,
         # permissions). The meter keeps working off the in-memory buffer, so
         # without this latch a dead spool looks exactly like a healthy recording.
-        self.write_error: Optional[str] = None
+        self.write_error = None
+        self._overflow: Optional[str] = None
+        self._overflow_at = 0.0
+        self._dropped_seen = 0
         self._stream = None
+        self._pa_counted = False
         self._file = None
         self._stopping = False
         self._wake = threading.Event()
@@ -175,6 +230,8 @@ class _MicStream:
             import sounddevice as sd
 
             self._writer.start()
+            _pa_stream_opened()
+            self._pa_counted = True
             self._stream = sd.RawInputStream(
                 device=index,
                 channels=self.channels,
@@ -190,6 +247,7 @@ class _MicStream:
         except Exception:
             self._stopping = True
             self._wake.set()
+            self._close_stream()
             if self._writer.is_alive():
                 self._writer.join(timeout=2.0)
             if self._file is not None:
@@ -208,6 +266,24 @@ class _MicStream:
     @property
     def path(self) -> str:
         return self._path
+
+    @property
+    def write_error(self) -> Optional[str]:
+        """A failed spool write, latched for good, or a recent input overflow.
+        An overflow (a momentary system stall) loses milliseconds of audio,
+        not the recording, so it clears after _RECOVERY_SECS without another
+        one, like the system-audio channel; a latched overflow used to keep
+        the red 'audio is being lost' banner up for the rest of the meeting."""
+        if self._hard_error:
+            return self._hard_error
+        overflow = getattr(self, "_overflow", None)
+        if overflow and time.monotonic() - getattr(self, "_overflow_at", 0.0) < _RECOVERY_SECS:
+            return overflow
+        return None
+
+    @write_error.setter
+    def write_error(self, value: Optional[str]) -> None:
+        self._hard_error = value
 
     def _cb(self, in_data, frame_count, time_info, status):
         if status:
@@ -240,8 +316,8 @@ class _MicStream:
             try:
                 self._file.write(view)
             except (ValueError, OSError) as exc:
-                if self.write_error is None:
-                    self.write_error = f"{type(exc).__name__}: {exc}"
+                if self._hard_error is None:
+                    self._hard_error = f"{type(exc).__name__}: {exc}"
             try:
                 arr = np.frombuffer(view, dtype=np.int16)
                 if arr.size:
@@ -252,23 +328,34 @@ class _MicStream:
                 pass
             block.used = 0
             self._free.append(block)
-            if self.write_error is None and (self._dropped_blocks or self._callback_issue):
-                detail = self._callback_issue or f"{self._dropped_blocks} callback blocks dropped"
-                self.write_error = f"audio input overflow ({detail})"
+            seen = getattr(self, "_dropped_seen", 0)
+            if self._dropped_blocks != seen or self._callback_issue:
+                detail = (self._callback_issue
+                          or f"{self._dropped_blocks - seen} callback blocks dropped")
+                self._dropped_seen = self._dropped_blocks
+                self._callback_issue = None
+                self._overflow = f"audio input overflow ({detail})"
+                self._overflow_at = time.monotonic()
 
-    def _close(self) -> None:
+    def _close_stream(self) -> None:
         try:
             if self._stream is not None:
                 self._stream.stop()
                 self._stream.close()
         except Exception:
             pass
+        if self._pa_counted:
+            self._pa_counted = False
+            _pa_stream_closed()
+
+    def _close(self) -> None:
+        self._close_stream()
         self._stopping = True
         self._wake.set()
         if self._writer.is_alive():
             self._writer.join(timeout=5.0)
-        if self._writer.is_alive() and self.write_error is None:
-            self.write_error = "microphone writer did not stop cleanly"
+        if self._writer.is_alive() and self._hard_error is None:
+            self._hard_error = "microphone writer did not stop cleanly"
         try:
             if self._file is not None:
                 self._file.close()
@@ -354,6 +441,7 @@ class _SystemAudioTap:
             except OSError:
                 pass
             raise
+        _helper_pids.add(self._proc.pid)
         self._reader = threading.Thread(
             target=self._read_events, name="earshot-audiotap-reader", daemon=True
         )
@@ -477,6 +565,7 @@ class _SystemAudioTap:
     def _terminate(self) -> None:
         self._stopping = True
         proc = self._proc
+        _helper_pids.discard(proc.pid)
         try:
             if proc.stdin:
                 proc.stdin.close()  # polite ask: stdin EOF triggers clean shutdown

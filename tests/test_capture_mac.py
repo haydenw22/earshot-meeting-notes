@@ -101,6 +101,73 @@ def test_mic_callback_queue() -> None:
             sys.modules["sounddevice"] = previous
 
 
+def test_mic_overflow_recovers() -> None:
+    print("== a momentary mic overflow clears; a failed spool write never does ==")
+
+    class FakeRawInputStream:
+        def __init__(self, **kwargs):
+            return None
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    previous = sys.modules.get("sounddevice")
+    sys.modules["sounddevice"] = types.SimpleNamespace(RawInputStream=FakeRawInputStream)
+    path = Path(tempfile.mkdtemp()) / "mic.raw"
+    try:
+        stream = capture._MicStream(1, 1, 48000, path)
+        stream._cb(memoryview(b"\x01\x00" * 256), 256, None, "input overflow")
+        deadline = time.monotonic() + 2
+        while stream.write_error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        check("overflow raises the recording-problem warning",
+              "overflow" in (stream.write_error or ""))
+        stream._overflow_at -= capture._RECOVERY_SECS + 1  # ...then 10 s of clean capture
+        check("warning clears after sustained clean capture", stream.write_error is None)
+        stream._cb(memoryview(b"\x01\x00" * 256), 256, None, "input overflow")
+        deadline = time.monotonic() + 2
+        while stream.write_error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        check("a later overflow warns again", "overflow" in (stream.write_error or ""))
+        stream.write_error = "OSError: No space left on device"
+        stream._overflow_at -= capture._RECOVERY_SECS + 1
+        check("failed spool writes stay latched", "No space" in (stream.write_error or ""))
+        stream.detach()
+    finally:
+        if previous is None:
+            sys.modules.pop("sounddevice", None)
+        else:
+            sys.modules["sounddevice"] = previous
+
+
+def test_call_detection_ignores_earshot() -> None:
+    print("== macOS call detection ignores Earshot's own capture ==")
+    import os
+
+    saved = (mic_usage._mac_capturing_pids, mic_usage._mac_mic_in_use)
+    try:
+        mic_usage._mac_mic_in_use = lambda: True  # the device-level view: "busy"
+        mic_usage._mac_capturing_pids = lambda: {os.getpid()}
+        check("Earshot recording alone is not a call", not mic_usage._mac_input_in_use_by_others())
+        mic_usage._mac_capturing_pids = lambda: {os.getpid(), 999_999}
+        check("another process capturing is", mic_usage._mac_input_in_use_by_others())
+        capture._helper_pids.add(888_888)
+        mic_usage._mac_capturing_pids = lambda: {888_888}
+        check("the system-audio helper is not a call", not mic_usage._mac_input_in_use_by_others())
+        capture._helper_pids.discard(888_888)
+        mic_usage._mac_capturing_pids = lambda: None
+        check("older macOS falls back to the device-level check",
+              mic_usage._mac_input_in_use_by_others())
+    finally:
+        mic_usage._mac_capturing_pids, mic_usage._mac_mic_in_use = saved
+
+
 class _FakeInput:
     def close(self):
         return None
@@ -108,6 +175,7 @@ class _FakeInput:
 
 class _FakeProcess:
     def __init__(self, lines, rc):
+        self.pid = 424242
         self.stdout = iter(lines)
         self.stdin = _FakeInput()
         self._rc = rc
@@ -243,9 +311,9 @@ def test_tap_transient_error_recovery() -> None:
 
 def test_mac_call_detection_is_conservative() -> None:
     print("== macOS call detection excludes browsers ==")
-    old_busy, old_run = mic_usage._mac_mic_in_use, mic_usage.subprocess.run
+    old_busy, old_run = mic_usage._mac_input_in_use_by_others, mic_usage.subprocess.run
     try:
-        mic_usage._mac_mic_in_use = lambda: True
+        mic_usage._mac_input_in_use_by_others = lambda: True
         mic_usage.subprocess.run = lambda *a, **k: types.SimpleNamespace(
             stdout="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n"
                    "/Applications/zoom.us.app/Contents/MacOS/zoom.us\n")
@@ -254,7 +322,7 @@ def test_mac_call_detection_is_conservative() -> None:
         check("browser is excluded from approximate attribution",
               not any(category == "browser" for _name, category in result))
     finally:
-        mic_usage._mac_mic_in_use, mic_usage.subprocess.run = old_busy, old_run
+        mic_usage._mac_input_in_use_by_others, mic_usage.subprocess.run = old_busy, old_run
 
 
 def test_screen_capture_failure_is_visible() -> None:
@@ -285,6 +353,8 @@ def test_screen_capture_failure_is_visible() -> None:
 def main() -> int:
     test_permission_preflight()
     test_mic_callback_queue()
+    test_mic_overflow_recovers()
+    test_call_detection_ignores_earshot()
     test_helper_startup_eof()
     test_shared_timeline()
     test_tap_transient_error_recovery()

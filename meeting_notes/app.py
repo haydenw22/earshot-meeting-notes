@@ -74,6 +74,19 @@ def _set_windows_app_id() -> None:
         pass
 
 
+def _confirm_code_update_started() -> None:
+    """Tell earshot_boot that a code update it activated got Earshot to a
+    working main window, so it stops counting this launch as a failed start
+    (three failed starts in a row and it falls back to the bundled app)."""
+    try:
+        import earshot_boot
+    except ImportError:
+        return
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(5000, earshot_boot.mark_healthy)
+
+
 def run() -> int:
     _set_windows_app_id()
     app = QApplication(sys.argv)
@@ -111,6 +124,7 @@ def run() -> int:
         window.on_account_changed()
 
     window.show()
+    _confirm_code_update_started()
 
     # Packaged Windows and macOS builds check GitHub for a newer release in the background;
     # if one is found the user gets an "Update available" dialog with the

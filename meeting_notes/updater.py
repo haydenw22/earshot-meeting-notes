@@ -14,6 +14,14 @@ published digest. A release without a digest asset is treated as not
 installable. Each download goes into its own freshly created private temp
 directory, never a predictable shared path.
 
+macOS prefers a code-only update when the release has one that fits this
+install: just Earshot's own Python code, signed with Earshot's update key and
+run by earshot_boot at the next launch, so the app bundle is never modified,
+no Apple signature is needed and macOS keeps the app's permissions. When the
+release changed anything beyond that code it swaps the whole bundle instead,
+which on an install without an Apple Developer ID requires Earshot's own
+release signature on the archive.
+
 The meeting database is NEVER touched by an update: only the program files
 (%LOCALAPPDATA%\\Programs\\Earshot on Windows, the Earshot.app bundle on
 macOS) are replaced, while recordings and the database live in the separate
@@ -25,6 +33,7 @@ payload just means "no update this launch", never a crash.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import plistlib
 import shutil
@@ -49,6 +58,13 @@ def _platform_assets(platform: str = sys.platform) -> tuple[str, str, bytes, str
 
 
 ASSET_NAME, ASSET_DIGEST_NAME, _MAGIC, _MAGIC_ERR = _platform_assets()
+
+# macOS-only release assets beside the full app archive (see earshot_boot.py).
+MAC_SIGNATURE_NAME = "Earshot-mac.zip.sig"
+CODE_ASSET_NAME = "Earshot-mac-code.zip"
+CODE_SIGNATURE_NAME = "Earshot-mac-code.zip.sig"
+CODE_META_NAME = "Earshot-mac-code.json"
+MAX_CODE_UPDATE_BYTES = 50 * 1024 * 1024
 _UA = "Earshot-Updater"
 _TMP_PREFIX = "EarshotUpdate-"
 _MAC_BUNDLE_ID = "app.tryearshot.earshot"
@@ -67,6 +83,11 @@ class UpdateInfo:
     notes: str          # markdown changelog covering everything newer than current
     download_url: str   # browser_download_url of EarshotSetup.exe
     digest_url: str = ""  # browser_download_url of EarshotSetup.exe.sha256
+    # macOS only (empty elsewhere, or when the release doesn't ship them):
+    signature_url: str = ""       # Earshot-mac.zip.sig
+    code_url: str = ""            # Earshot-mac-code.zip (code-only update)
+    code_signature_url: str = ""  # Earshot-mac-code.zip.sig
+    code_meta_url: str = ""       # Earshot-mac-code.json
 
 
 def is_supported() -> bool:
@@ -172,14 +193,12 @@ def check_for_update(current_version: str, *, timeout: float = 8.0,
     if not _is_newer(latest.get("tag_name", ""), current_version):
         return None
 
-    download_url = digest_url = ""
+    urls: dict[str, str] = {}
     for asset in latest.get("assets", []) or []:
-        if not isinstance(asset, dict):
-            continue
-        if asset.get("name") == ASSET_NAME:
-            download_url = asset.get("browser_download_url") or ""
-        elif asset.get("name") == ASSET_DIGEST_NAME:
-            digest_url = asset.get("browser_download_url") or ""
+        if isinstance(asset, dict) and asset.get("name"):
+            urls[str(asset["name"])] = str(asset.get("browser_download_url") or "")
+    download_url = urls.get(ASSET_NAME, "")
+    digest_url = urls.get(ASSET_DIGEST_NAME, "")
     # A release without an installer OR without its digest is not installable —
     # we never execute anything we can't verify.
     if not download_url or not digest_url:
@@ -194,14 +213,21 @@ def check_for_update(current_version: str, *, timeout: float = 8.0,
         blocks.append(f"## {_norm(r.get('tag_name', ''))}\n\n{cl}" if cl
                       else f"## {_norm(r.get('tag_name', ''))}")
     notes = "\n\n".join(blocks).strip() or "A new version of Earshot is available."
+    extras: dict[str, str] = {}
+    if ASSET_NAME == "Earshot-mac.zip":
+        for field, name in (("signature_url", MAC_SIGNATURE_NAME), ("code_url", CODE_ASSET_NAME),
+                            ("code_signature_url", CODE_SIGNATURE_NAME),
+                            ("code_meta_url", CODE_META_NAME)):
+            url = urls.get(name, "")
+            extras[field] = url if url and _host_allowed(url) else ""
     return UpdateInfo(version=_norm(latest.get("tag_name", "")), notes=notes,
-                      download_url=download_url, digest_url=digest_url)
+                      download_url=download_url, digest_url=digest_url, **extras)
 
 
-def default_download_path() -> str:
+def default_download_path(name: str = "") -> str:
     """A fresh, private per-download directory — never a predictable shared temp
     path that another process could pre-create or swap a file into."""
-    return os.path.join(tempfile.mkdtemp(prefix=_TMP_PREFIX), ASSET_NAME)
+    return os.path.join(tempfile.mkdtemp(prefix=_TMP_PREFIX), name or ASSET_NAME)
 
 
 def cleanup_download(path: str) -> None:
@@ -239,7 +265,8 @@ def fetch_expected_sha256(url: str, *, timeout: float = 15.0, transport=None) ->
 
 def download_installer(url: str, dest_path: str, progress_cb=None, *,
                        expected_sha256: str, timeout: float = 120.0,
-                       chunk: int = 262144, cancelled=None, transport=None) -> str:
+                       chunk: int = 262144, cancelled=None, transport=None,
+                       max_bytes: int = 0) -> str:
     """Stream the installer to dest_path, reporting progress_cb(fraction 0..1).
 
     Hard requirements before dest_path ever exists: HTTPS GitHub hosts only
@@ -247,8 +274,9 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
     SHA-256 match against the release's published digest. `cancelled` is polled
     between chunks; returning True raises DownloadCancelled. Writes to a .part
     file then atomically renames; any failure removes the partial file. Raises
-    on failure.
+    on failure. `max_bytes` tightens the size cap for smaller payloads.
     """
+    limit = max_bytes or MAX_INSTALLER_BYTES
     expected = (expected_sha256 or "").strip().lower()
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
         raise ValueError("no trusted SHA-256 digest for this update; not downloading")
@@ -268,7 +296,7 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
                     raise ValueError(f"update blocked: redirected off GitHub ({hop.url.host})")
             resp.raise_for_status()
             total = int(resp.headers.get("Content-Length") or 0)
-            if total > MAX_INSTALLER_BYTES:
+            if total > limit:
                 raise ValueError("update blocked: download is implausibly large")
             done = 0
             first_bytes = True
@@ -283,7 +311,7 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
                     f.write(data)
                     digest.update(data)
                     done += len(data)
-                    if done > MAX_INSTALLER_BYTES:
+                    if done > limit:
                         raise ValueError("update blocked: download is implausibly large")
                     if progress_cb and total:
                         progress_cb(min(1.0, done / total))
@@ -301,7 +329,115 @@ def download_installer(url: str, dest_path: str, progress_cb=None, *,
     return dest_path
 
 
-def run_installer(installer_path: str) -> None:
+def _fetch_small(url: str, *, limit: int, timeout: float = 15.0, transport=None) -> bytes:
+    """GET a small release asset (digest, signature, manifest), GitHub-only."""
+    if not _host_allowed(url):
+        raise ValueError("not an official GitHub release URL")
+    kwargs: dict = {"timeout": timeout, "headers": {"User-Agent": _UA},
+                    "follow_redirects": True}
+    if transport is not None:
+        kwargs["transport"] = transport
+    body = bytearray()
+    with httpx.Client(**kwargs) as client, client.stream("GET", url) as resp:
+        for hop in [*resp.history, resp]:
+            if not _host_allowed(hop.url):
+                raise ValueError(f"redirected off GitHub ({hop.url.host})")
+        resp.raise_for_status()
+        for data in resp.iter_bytes():
+            body += data
+            if len(body) > limit:
+                raise ValueError("release asset is implausibly large")
+    return bytes(body)
+
+
+def fetch_signature(url: str, *, transport=None) -> str:
+    """Download a release .sig asset: one hex Ed25519 signature."""
+    text = _fetch_small(url, limit=1024, transport=transport).decode("ascii", "replace")
+    token = (text.split() or [""])[0].strip().lower()
+    if len(token) != 128 or any(c not in "0123456789abcdef" for c in token):
+        raise ValueError("release signature asset is malformed")
+    return token
+
+
+def verify_release_signature(asset_name: str, sha256_hex: str, signature_url: str, *,
+                             transport=None) -> bool:
+    """Check Earshot's release signature for an asset whose SHA-256 is already
+    verified. False when the release has no signature for it; raises when it
+    has one that doesn't verify."""
+    if not signature_url:
+        return False
+    import earshot_boot
+
+    signature = fetch_signature(signature_url, transport=transport)
+    if not earshot_boot.verify_asset(asset_name, bytes.fromhex(sha256_hex), signature):
+        raise ValueError("update failed verification (not signed by Earshot); not installing")
+    return True
+
+
+def code_update_meta(info: UpdateInfo, *, transport=None) -> dict | None:
+    """The release's code-only update description, when it can install onto
+    this exact app (same runtime, newer, never failed here); else None."""
+    if not (info.code_url and info.code_signature_url and info.code_meta_url):
+        return None
+    try:
+        import earshot_boot
+    except ImportError:
+        return None
+    if not earshot_boot.supported() or info.version in earshot_boot.rejected_versions():
+        return None
+    try:
+        meta = json.loads(_fetch_small(info.code_meta_url, limit=16384, transport=transport))
+    except Exception:
+        return None
+    if not isinstance(meta, dict):
+        return None
+    digest = str(meta.get("sha256") or "").lower()
+    if (meta.get("version") != info.version
+            or meta.get("runtime") != earshot_boot.bundle_runtime()
+            or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
+        return None
+    return meta
+
+
+def install_code_update(info: UpdateInfo, progress_cb=None, *, cancelled=None,
+                        transport=None) -> str | None:
+    """Download, verify and install the release's code-only update (macOS).
+    Returns the version the next launch will run, or None when this release
+    has no code update that fits this install (use the full update instead).
+    Raises if a fitting code update fails to download or verify."""
+    meta = code_update_meta(info, transport=transport)
+    if meta is None:
+        return None
+    import earshot_boot
+
+    signature = fetch_signature(info.code_signature_url, transport=transport)
+    dest = default_download_path(CODE_ASSET_NAME)
+    try:
+        path = download_installer(info.code_url, dest, progress_cb,
+                                  expected_sha256=meta["sha256"], cancelled=cancelled,
+                                  transport=transport, max_bytes=MAX_CODE_UPDATE_BYTES)
+        return earshot_boot.install_code_update(path, signature)
+    finally:
+        cleanup_download(dest)
+
+
+def relaunch_after_exit(pid: int | None = None) -> bool:
+    """macOS: reopen Earshot once this process has exited, so a freshly
+    installed code update starts. Gives up after a minute if the app is still
+    running (the user cancelled quitting). False when not inside a bundle."""
+    app = _running_app_bundle() if sys.platform == "darwin" else None
+    if not app:
+        return False
+    q = "'" + str(app).replace("'", "'\\''") + "'"
+    script = (f"n=0; while /bin/kill -0 {int(pid or os.getpid())} 2>/dev/null; do "
+              f"n=$((n+1)); [ \"$n\" -gt 200 ] && exit 0; sleep 0.3; done; /usr/bin/open {q}")
+    subprocess.Popen(["/bin/sh", "-c", script], close_fds=True, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
+    return True
+
+
+def run_installer(installer_path: str, *, signed: bool = False) -> None:
     """Kick off the platform's install step, detached so it outlives this
     process and can replace it. The caller must quit the app immediately after
     so no files stay locked.
@@ -309,9 +445,10 @@ def run_installer(installer_path: str) -> None:
     Windows: run the Inno installer with /SILENT (progress window, no wizard);
     it closes Earshot, installs, then relaunches it. macOS: extract the
     verified zip and hand over to a detached swap script (see
-    _install_mac_update)."""
+    _install_mac_update). `signed` says the archive passed Earshot's release
+    signature check (verify_release_signature)."""
     if sys.platform == "darwin":
-        _install_mac_update(installer_path)
+        _install_mac_update(installer_path, signed=signed)
         return
     creationflags = 0
     if sys.platform == "win32":
@@ -401,6 +538,8 @@ def _app_plist(app_path: str) -> dict:
 
 
 def _codesign_details(app_path: str) -> tuple[str, str]:
+    """(TeamIdentifier, designated requirement). The team is '' for an ad-hoc
+    signed (not Developer ID) app."""
     proc = subprocess.run(
         ["/usr/bin/codesign", "-d", "--verbose=4", "-r-", app_path],
         capture_output=True, text=True, check=False,
@@ -415,15 +554,16 @@ def _codesign_details(app_path: str) -> tuple[str, str]:
             team = line.partition("=")[2].strip()
         elif "designated =>" in line:
             requirement = line.partition("designated =>")[2].strip()
-    if not team or team.lower() in {"not set", "none"}:
-        raise ValueError("update blocked: app is not Developer ID signed")
-    if not requirement:
-        raise ValueError("update blocked: app has no designated signing requirement")
+    if team.lower() in {"not set", "none"}:
+        team = ""
     return team, requirement
 
 
-def _validate_mac_update_app(new_app: str, current_app: str) -> None:
-    """Fail closed unless `new_app` is the expected newer notarized Earshot."""
+def _validate_mac_update_app(new_app: str, current_app: str, *, signed: bool = False) -> None:
+    """Fail closed unless `new_app` is the expected newer Earshot: notarized
+    by the same Apple developer when this install is Developer ID signed, or
+    carrying Earshot's own release signature (`signed`, checked on the archive
+    before extraction) when it isn't."""
     new_info = _app_plist(new_app)
     current_info = _app_plist(current_app)
     if new_info.get("CFBundleIdentifier") != _MAC_BUNDLE_ID:
@@ -442,6 +582,14 @@ def _validate_mac_update_app(new_app: str, current_app: str) -> None:
     if verified.returncode:
         raise ValueError("update blocked: replacement app has an invalid code signature")
     current_team, requirement = _codesign_details(current_app)
+    if not current_team:
+        # No Apple identity to compare against, so Earshot's own Ed25519
+        # release signature is what proves the archive came from Earshot.
+        if not signed:
+            raise ValueError("update blocked: release is not signed with Earshot's update key")
+        return
+    if not requirement:
+        raise ValueError("update blocked: app has no designated signing requirement")
     new_team, _ = _codesign_details(new_app)
     if new_team != current_team:
         raise ValueError("update blocked: replacement app was signed by a different developer")
@@ -459,7 +607,7 @@ def _validate_mac_update_app(new_app: str, current_app: str) -> None:
         raise ValueError("update blocked: replacement app is not accepted by Gatekeeper")
 
 
-def _install_mac_update(zip_path: str) -> None:
+def _install_mac_update(zip_path: str, *, signed: bool = False) -> None:
     """Extract the verified zip and launch the detached swap script. Raises if
     the archive doesn't contain a launchable Earshot.app or we're not running
     from inside a bundle; the caller shows the error and the app keeps running
@@ -495,7 +643,7 @@ def _install_mac_update(zip_path: str) -> None:
         main_exe = os.path.join(new_app, "Contents", "MacOS", "Earshot")
         if not (os.path.isfile(main_exe) and os.access(main_exe, os.X_OK)):
             raise ValueError("update blocked: archive does not contain a launchable Earshot.app")
-        _validate_mac_update_app(new_app, dest_app)
+        _validate_mac_update_app(new_app, dest_app, signed=signed)
         script = os.path.join(workdir, "install.sh")
         with open(script, "w", encoding="utf-8") as f:
             f.write(_compose_install_script(os.getpid(), new_app, dest_app, workdir))

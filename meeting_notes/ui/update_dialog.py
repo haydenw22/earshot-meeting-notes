@@ -11,6 +11,7 @@ whole process if a running QThread is destroyed, so we never let that happen.
 """
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -63,14 +64,18 @@ class _CheckWorker(QThread):
 
 
 class _DownloadWorker(QThread):
+    """Downloads and verifies the update. Emits done(("code", version)) once a
+    macOS code-only update is installed for the next launch, or
+    done(("full", installer_path, signed)) for an installer / app archive
+    that is verified and ready to run."""
+
     progress = Signal(float)   # 0..1
-    done = Signal(str)         # verified installer path
+    done = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, url: str, digest_url: str, dest: str, parent=None):
+    def __init__(self, info: UpdateInfo, dest: str, parent=None):
         super().__init__(parent)
-        self.url = url
-        self.digest_url = digest_url
+        self.info = info
         self.dest = dest
         self._cancelled = False
 
@@ -78,11 +83,27 @@ class _DownloadWorker(QThread):
         self._cancelled = True
 
     def run(self) -> None:
+        cancelled = lambda: self._cancelled  # noqa: E731
+        if sys.platform == "darwin" and self.info.code_url:
+            try:
+                version = updater.install_code_update(
+                    self.info, progress_cb=self.progress.emit, cancelled=cancelled)
+            except updater.DownloadCancelled:
+                return
+            except Exception:  # noqa: BLE001 — the full app update is still on the table
+                version = None
+            if version:
+                self.done.emit(("code", version))
+                return
+            if self._cancelled:
+                return
         try:
-            expected = updater.fetch_expected_sha256(self.digest_url)
+            expected = updater.fetch_expected_sha256(self.info.digest_url)
             path = updater.download_installer(
-                self.url, self.dest, progress_cb=self.progress.emit,
-                expected_sha256=expected, cancelled=lambda: self._cancelled)
+                self.info.download_url, self.dest, progress_cb=self.progress.emit,
+                expected_sha256=expected, cancelled=cancelled)
+            signed = sys.platform == "darwin" and updater.verify_release_signature(
+                updater.ASSET_NAME, expected, self.info.signature_url)
         except updater.DownloadCancelled:
             updater.cleanup_download(self.dest)
             return
@@ -94,7 +115,7 @@ class _DownloadWorker(QThread):
         if self._cancelled:  # finished in the same instant the user closed — don't install
             updater.cleanup_download(path)
             return
-        self.done.emit(path)
+        self.done.emit(("full", path, signed))
 
 
 class UpdateDialog(QDialog):
@@ -159,8 +180,7 @@ class UpdateDialog(QDialog):
         self.progress.setValue(0)
         self.status.setStyleSheet("")
         self.status.setText("Downloading update…")
-        self.worker = _DownloadWorker(self.info.download_url, self.info.digest_url,
-                                      updater.default_download_path(), self)
+        self.worker = _DownloadWorker(self.info, updater.default_download_path(), self)
         self.worker.progress.connect(self._on_progress)
         self.worker.done.connect(self._on_done)
         self.worker.failed.connect(self._on_failed)
@@ -169,19 +189,24 @@ class UpdateDialog(QDialog):
     def _on_progress(self, f: float) -> None:
         self.progress.setValue(int(f * 100))
 
-    def _on_done(self, path: str) -> None:
-        self.worker = None
-        if sys.platform == "darwin":
-            from . import workers
+    def _app_busy(self) -> bool:
+        from . import workers
 
-            window = self.parentWidget()
-            record = getattr(window, "record", None)
-            if ((record is not None and record.is_busy()) or workers.active_count()):
-                updater.cleanup_download(path)
-                self._on_failed(
-                    "Finish the active recording or background task before installing the update."
-                )
-                return
+        record = getattr(self.parentWidget(), "record", None)
+        return bool((record is not None and record.is_busy()) or workers.active_count())
+
+    def _on_done(self, result) -> None:
+        self.worker = None
+        if result[0] == "code":
+            self._code_update_ready(result[1])
+            return
+        _kind, path, signed = result
+        if sys.platform == "darwin" and self._app_busy():
+            updater.cleanup_download(path)
+            self._on_failed(
+                "Finish the active recording or background task before installing the update."
+            )
+            return
         if sys.platform == "darwin":
             self.status.setText("Installing the update. Earshot will close and reopen. "
                                 "Your recordings and notes are kept.")
@@ -189,11 +214,41 @@ class UpdateDialog(QDialog):
             self.status.setText("Starting the installer. Earshot will close and reopen. "
                                 "Your recordings and notes are kept.")
         try:
-            updater.run_installer(path)
+            updater.run_installer(path, signed=signed)
         except Exception as e:  # noqa: BLE001
             updater.cleanup_download(path)
             self._on_failed(f"Couldn't start the installer: {e}")
             return
+        self._close_app()
+
+    def _code_update_ready(self, version: str) -> None:
+        """A code-only update is installed; it runs from the next launch, so
+        restarting is all that's left (and can wait)."""
+        self.progress.setVisible(False)
+        self.status.setStyleSheet("")
+        self.status.setText(
+            f"Earshot {version} is ready. Restart Earshot to start using it, or choose "
+            "Later and it starts the next time you open Earshot. Your recordings and "
+            "notes are kept.")
+        self.install_btn.clicked.disconnect()
+        self.install_btn.clicked.connect(self._restart)
+        self.install_btn.setText("Restart now")
+        self.install_btn.setEnabled(True)
+        self.later_btn.setText("Later")
+        self.later_btn.setEnabled(True)
+
+    def _restart(self) -> None:
+        if self._app_busy():
+            self.status.setStyleSheet(f"color:{self.theme.color('danger')};")
+            self.status.setText(
+                "Finish the active recording or background task first. The update also "
+                "starts by itself the next time you open Earshot.")
+            return
+        self.install_btn.setEnabled(False)
+        updater.relaunch_after_exit(os.getpid())
+        self._close_app()
+
+    def _close_app(self) -> None:
         # Close the main window so its closeEvent performs the normal worker,
         # overlay and update-thread cleanup. QApplication.quit() bypassed that
         # guard and could interrupt an active recording.

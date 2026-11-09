@@ -7,9 +7,10 @@ Zoom, Teams, Discord and browser-tab calls (Meet shows up as the browser exe) â€
 no per-app integration, no extra dependencies, no audio probing.
 
 macOS: there is no supported per-app equivalent an ordinary app may read, so
-this is explicitly approximate. Core Audio checks every input device (not just
-the default) for active capture, then the process list identifies dedicated
-meeting apps that could be responsible. Browsers are deliberately excluded on
+this is explicitly approximate. Core Audio's per-process objects say whether
+any process other than Earshot is capturing audio input (older systems fall
+back to checking every input device), then the process list identifies
+dedicated meeting apps that could be responsible. Browsers are deliberately excluded on
 macOS because the OS cannot distinguish Meet from a voice note or unrelated
 mic use; the Settings UI discloses this limitation.
 """
@@ -103,6 +104,79 @@ _MAC_BROWSER_PROCS = {
 }
 
 
+def _mac_capturing_pids() -> set[int] | None:
+    """PIDs of the processes with an active audio input stream, from Core
+    Audio's per-process objects (macOS 14.2+). None if they're unavailable."""
+    import ctypes
+    import ctypes.util
+
+    lib = ctypes.util.find_library("CoreAudio")
+    if not lib:
+        return None
+    ca = ctypes.CDLL(lib)
+
+    class _Address(ctypes.Structure):
+        _fields_ = [("mSelector", ctypes.c_uint32),
+                    ("mScope", ctypes.c_uint32),
+                    ("mElement", ctypes.c_uint32)]
+
+    def fourcc(code: bytes) -> int:
+        return int.from_bytes(code, "big")
+
+    glob = fourcc(b"glob")
+    addr = _Address(fourcc(b"prs#"), glob, 0)  # kAudioHardwarePropertyProcessObjectList
+    size = ctypes.c_uint32(0)
+    if ca.AudioObjectGetPropertyDataSize(1, ctypes.byref(addr), 0, None, ctypes.byref(size)) != 0:
+        return None
+    count = size.value // ctypes.sizeof(ctypes.c_uint32)
+    objects = (ctypes.c_uint32 * max(1, count))()
+    if count and ca.AudioObjectGetPropertyData(1, ctypes.byref(addr), 0, None,
+                                               ctypes.byref(size), objects) != 0:
+        return None
+    pids: set[int] = set()
+    for obj in objects[:count]:
+        running = ctypes.c_uint32(0)
+        rsize = ctypes.c_uint32(ctypes.sizeof(running))
+        raddr = _Address(fourcc(b"piri"), glob, 0)  # kAudioProcessPropertyIsRunningInput
+        if ca.AudioObjectGetPropertyData(obj, ctypes.byref(raddr), 0, None,
+                                         ctypes.byref(rsize), ctypes.byref(running)) != 0:
+            continue
+        if not running.value:
+            continue
+        pid = ctypes.c_int32(0)
+        psize = ctypes.c_uint32(ctypes.sizeof(pid))
+        paddr = _Address(fourcc(b"ppid"), glob, 0)  # kAudioProcessPropertyPID
+        if ca.AudioObjectGetPropertyData(obj, ctypes.byref(paddr), 0, None,
+                                         ctypes.byref(psize), ctypes.byref(pid)) == 0:
+            pids.add(int(pid.value))
+    return pids
+
+
+def _own_capture_pids() -> set[int]:
+    """Earshot itself and its system-audio helper: their capture is never 'a call'."""
+    own = {os.getpid()}
+    try:
+        from ..audio import _capture_mac
+
+        own |= _capture_mac.helper_pids()
+    except Exception:
+        pass
+    return own
+
+
+def _mac_input_in_use_by_others() -> bool:
+    """True when something other than Earshot is capturing audio input.
+
+    Earshot's own microphone stream used to count, so while it recorded the
+    mic never looked idle: the 'call ended, stop recording?' prompt could not
+    fire and the next call never prompted. Per-process data lets us leave
+    Earshot out; without it (older macOS) fall back to the device-level check."""
+    pids = _mac_capturing_pids()
+    if pids is None:
+        return _mac_mic_in_use()
+    return bool(pids - _own_capture_pids())
+
+
 def _mac_mic_in_use() -> bool:
     """True when any Core Audio input device is capturing in any process."""
     import ctypes
@@ -162,7 +236,7 @@ def _mac_apps_classified() -> list[tuple[str, str]]:
     to false prompts.
     """
     try:
-        if not _mac_mic_in_use():
+        if not _mac_input_in_use_by_others():
             return []
         procs = subprocess.run(["/bin/ps", "-axo", "comm="], capture_output=True,
                                text=True, timeout=5).stdout.splitlines()

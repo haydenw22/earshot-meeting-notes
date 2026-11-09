@@ -102,6 +102,15 @@ def main() -> int:
     check("resummarise enabled with transcript", page.act_resummarise.isEnabled())
     check("reprocess enabled with audio_dir", page.act_reprocess.isEnabled())
     check("folder enabled with audio_dir", page.act_folder.isEnabled())
+    # recordings now transcribe in the background: a second pipeline on the
+    # same meeting would overwrite its audio files mid-upload
+    repo.update(m2.id, status="Transcribing")
+    page.refresh()
+    check("reprocess disabled while the meeting is being transcribed",
+          not page.act_reprocess.isEnabled() and not page.act_resummarise.isEnabled())
+    repo.update(m2.id, status="Done")
+    page.refresh()
+    check("reprocess re-enabled once processing finished", page.act_reprocess.isEnabled())
 
     m3 = repo.create(date_text="d", date_iso="2026-07-02", attendees=[])
     repo.update(m3.id, title="Bare meeting", status="New")

@@ -10,7 +10,16 @@ name: Release
 # verifies before installing anything:
 #   EarshotSetup.exe  + EarshotSetup.exe.sha256    (Windows installer)
 #   Earshot.dmg       + Earshot.dmg.sha256         (macOS human download)
-#   Earshot-mac.zip   + Earshot-mac.zip.sha256     (macOS auto-update payload)
+#   Earshot-mac.zip   + Earshot-mac.zip.sha256     (macOS full-app update payload)
+#   Earshot-mac.zip.sig                            (Earshot's Ed25519 signature)
+#   Earshot-mac-code.zip + .sig + Earshot-mac-code.json
+#                         (macOS code-only update: just meeting_notes, signed,
+#                          installed without touching the app bundle; see
+#                          earshot_boot.py)
+#
+# The .sig files are made with the EARSHOT_UPDATE_KEY secret (Ed25519 seed,
+# hex). Tagged releases fail without it: an unsigned mac install will only
+# update itself from signed assets.
 #
 # Manual dry runs may produce an ad-hoc artifact for CI inspection. Tagged
 # production releases fail closed unless every Developer ID + notarization
@@ -104,6 +113,7 @@ jobs:
       APPLE_NOTARY_ID: ${{ secrets.APPLE_NOTARY_ID }}
       APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      EARSHOT_UPDATE_KEY: ${{ secrets.EARSHOT_UPDATE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -138,6 +148,14 @@ jobs:
           fi
           exit "$missing"
 
+      - name: Require the update signing key for tagged releases
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [ -z "$EARSHOT_UPDATE_KEY" ]; then
+            echo "::error::Required release secret EARSHOT_UPDATE_KEY is missing (macOS updates must be signed)"
+            exit 1
+          fi
+
       - name: Verify tag matches __version__ (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -161,6 +179,8 @@ jobs:
           python tests/test_capture_mac.py
           python tests/test_finalize.py
           python tests/test_updater_mac.py
+          python tests/test_code_update.py
+          python tests/test_device_reconnect.py
 
       - name: Build the audio tap helper
         run: sh packaging/mac/audiotap/build.sh
@@ -214,14 +234,20 @@ jobs:
       # Earshot-mac.zip is the auto-update payload (ditto preserves the bundle
       # exactly); Earshot.dmg is the human download. Both get the digest the
       # in-app updater / users verify.
-      - name: Package zip + dmg + digests
+      - name: Package zip + dmg + code update + digests + signatures
         run: |
           ditto -c -k --keepParent dist/Earshot.app dist/Earshot-mac.zip
           sh packaging/mac/make_dmg.sh
+          python packaging/mac/make_code_patch.py dist
           (cd dist && shasum -a 256 Earshot-mac.zip > Earshot-mac.zip.sha256)
           (cd dist && shasum -a 256 Earshot.dmg > Earshot.dmg.sha256)
           cat dist/Earshot-mac.zip.sha256 dist/Earshot.dmg.sha256
           hdiutil verify dist/Earshot.dmg
+          if [ -n "$EARSHOT_UPDATE_KEY" ]; then
+            python packaging/sign_update.py dist/Earshot-mac.zip dist/Earshot-mac-code.zip
+          else
+            echo "::warning::EARSHOT_UPDATE_KEY not set: dry-run assets are unsigned"
+          fi
 
       - name: Upload macOS artifact (always; the dry-run output)
         uses: actions/upload-artifact@v4
@@ -232,6 +258,10 @@ jobs:
             dist/Earshot.dmg.sha256
             dist/Earshot-mac.zip
             dist/Earshot-mac.zip.sha256
+            dist/Earshot-mac.zip.sig
+            dist/Earshot-mac-code.zip
+            dist/Earshot-mac-code.zip.sig
+            dist/Earshot-mac-code.json
           if-no-files-found: error
 
   release:
@@ -267,6 +297,10 @@ jobs:
             dist/Earshot.dmg.sha256
             dist/Earshot-mac.zip
             dist/Earshot-mac.zip.sha256
+            dist/Earshot-mac.zip.sig
+            dist/Earshot-mac-code.zip
+            dist/Earshot-mac-code.zip.sig
+            dist/Earshot-mac-code.json
           draft: false
           prerelease: false
           fail_on_unmatched_files: true

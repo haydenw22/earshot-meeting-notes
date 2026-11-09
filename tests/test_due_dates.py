@@ -221,24 +221,28 @@ def main() -> int:
         todoist.create_task = orig_create
 
     print("== render / share show the due label ==")
+    # Relative to today: a hardcoded "future" date expires (2026-07-25 did,
+    # and the exports then rightly said Overdue instead of the date).
+    soon = _dt.date.today() + _dt.timedelta(days=20)
+    soon_label = f"{soon.day} {soon.strftime('%b')}"
     notes4 = {
         "title": "M4", "summary": "s", "attendees": [],
         "action_items": [
-            {"task": "Finish deck", "owner": "Sam", "done": False, "confirmed": True, "due": "2026-07-25"},
+            {"task": "Finish deck", "owner": "Sam", "done": False, "confirmed": True, "due": soon.isoformat()},
             {"task": "No deadline here", "owner": None, "done": False, "confirmed": True, "due": None},
         ],
         "sections": [],
     }
     html_out = render.to_html(notes4)
     txt_out = render.to_plaintext(notes4)
-    check("HTML export shows '· due <label>'", "due 25 Jul" in html_out)
-    check("plaintext export shows '— due <label>'", "— due 25 Jul" in txt_out)
-    check("no due text for the item without one", txt_out.count("due 25 Jul") == 1)
+    check("HTML export shows '· due <label>'", f"due {soon_label}" in html_out)
+    check("plaintext export shows '— due <label>'", f"— due {soon_label}" in txt_out)
+    check("no due text for the item without one", txt_out.count(f"due {soon_label}") == 1)
 
     m4 = repo.create(date_text="d", date_iso="2026-07-03", attendees=[])
     repo.update(m4.id, title="M4", status="Done", notes_json=json.dumps(notes4))
     share_out = share.to_share_html(repo.get(m4.id))
-    check("share HTML shows the due label", "due 25 Jul" in share_out)
+    check("share HTML shows the due label", f"due {soon_label}" in share_out)
 
     repo.close()
     print("\nDUE-DATE TESTS PASSED")

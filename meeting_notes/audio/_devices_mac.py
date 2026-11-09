@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ._capture_mac import TAP_CHANNELS, TAP_RATE
+from ._capture_mac import TAP_CHANNELS, TAP_RATE, refresh_device_list
 from .devices import AudioDevice
 
 SYSTEM_AUDIO_NAME = "System audio"
@@ -17,9 +17,12 @@ SYSTEM_AUDIO_INDEX = -1  # sentinel: "use the tap helper", not a PortAudio index
 
 
 def list_input_devices() -> list[AudioDevice]:
-    """Real microphones / capture devices."""
+    """Real microphones / capture devices, freshly read from the system so a
+    headset that reconnected since the last listing is current (indices are
+    only valid until the next listing; see refresh_device_list)."""
     import sounddevice as sd
 
+    refresh_device_list()
     try:
         infos = sd.query_devices()
     except Exception:

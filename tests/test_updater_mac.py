@@ -188,6 +188,10 @@ def _fake_app(path: Path, marker: str) -> None:
     (path / "Contents" / "marker.txt").write_text(marker)
 
 
+def _sandbox_home() -> dict:
+    return dict(os.environ, HOME=tempfile.mkdtemp(prefix="earshot_home_"))
+
+
 def test_mac_swap_integration():
     """darwin only: run the real swap script against two fake .app trees."""
     if sys.platform != "darwin":
@@ -216,7 +220,9 @@ def test_mac_swap_integration():
     sh = work / "install.sh"
     sh.write_text(script)
     sh.chmod(0o700)
-    subprocess.run(["/bin/sh", str(sh)], check=True, timeout=30)
+    # The script logs to $HOME/Library/Logs/Earshot/update.log: keep test runs
+    # out of the real user's log.
+    subprocess.run(["/bin/sh", str(sh)], check=True, timeout=30, env=_sandbox_home())
 
     check("new app is in place",
           (dest / "Contents" / "marker.txt").read_text() == "NEW")
@@ -244,7 +250,7 @@ def test_mac_swap_rolls_back_failed_launch():
     sh = work / "install.sh"
     sh.write_text(script)
     sh.chmod(0o700)
-    result = subprocess.run(["/bin/sh", str(sh)], check=False, timeout=10)
+    result = subprocess.run(["/bin/sh", str(sh)], check=False, timeout=10, env=_sandbox_home())
     check("failed health check returns failure", result.returncode != 0)
     check("old app restored after failed launch",
           (dest / "Contents" / "marker.txt").read_text() == "OLD")

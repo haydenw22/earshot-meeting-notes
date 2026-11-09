@@ -242,7 +242,7 @@ def test_dialog_lifecycle():
 
     updater.download_installer = fake_download
     updater.fetch_expected_sha256 = lambda _url, **_k: EXE_SHA
-    updater.run_installer = lambda path: launched.append(path)
+    updater.run_installer = lambda path, **_k: launched.append(path)
     try:
         dlg2 = UpdateDialog(None, _Theme(), info)
         dlg2._start()
