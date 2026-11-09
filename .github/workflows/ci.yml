@@ -62,7 +62,7 @@ jobs:
     # Apple Silicon. QT_QPA_PLATFORM is cocoa (not offscreen): the offscreen
     # plugin's stylesheet repolish is pathologically slow on macOS (minutes per
     # theme toggle), while cocoa runs headless-fine on the GitHub runner.
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 was retired by GitHub (Nov 2026)
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -115,6 +115,9 @@ jobs:
           python tests/test_updater.py
           python tests/test_updater_mac.py
           python tests/test_capture_mac.py
+          python tests/test_device_reconnect.py
+          python tests/test_back_to_back.py
+          python tests/test_code_update.py
           python tests/test_ghost_flash.py
 
       - name: Build and validate the packaged macOS app

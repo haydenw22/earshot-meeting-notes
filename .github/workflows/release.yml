@@ -103,7 +103,7 @@ jobs:
 
   build-macos:
     # Apple Silicon (arm64), minimum macOS 14.4 at runtime.
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 was retired by GitHub (Nov 2026)
     timeout-minutes: 30
     env:
       PYTHONIOENCODING: utf-8
