@@ -973,6 +973,10 @@ class RecordPage(QWidget):
         if self.is_recording():
             return  # the meeting row shows the error; don't interrupt this recording
         self.status_label.setText(f"Error: {msg}")
+        from ..transcription.earshot_client import is_plan_block
+        if is_plan_block(msg) and hasattr(self.shell, "trial_watcher"):
+            self.shell.trial_watcher.blocked(msg)  # the upgrade prompt, not an error box
+            return
         QMessageBox.critical(self, "Processing failed", msg)
 
     def is_recording(self) -> bool:

@@ -51,6 +51,7 @@ _STATUS_CHIP = {
     "beta": ("Beta", "primary", "primary_soft"),
     "past_due": ("Past due", "warning", "warning_soft"),
     "canceled": ("Canceled", "danger", "danger_soft"),
+    "expired": ("Trial ended", "danger", "danger_soft"),
     "none": ("No subscription", "text_muted", "surface_hover"),
 }
 
@@ -322,7 +323,10 @@ class AccountPage(QWidget):
         when = friendly_day(period_end)  # "2026-07-20" -> "July 20"
         # copy matches the subscription state: a trial ENDS, a cancelled sub RUNS
         # OUT, an active sub RENEWS — and the button says what to do about it
-        if sub_status in ("trialing", "beta"):
+        if sub_status == "expired":  # the free trial ran out
+            self.renewal_lbl.setText(f"Free trial ended {when}" if when else "Free trial ended")
+            self.billing_btn.setText("Subscribe")
+        elif sub_status in ("trialing", "beta"):
             self.renewal_lbl.setText(f"Trial ends {when}" if when else "Trial active")
             self.billing_btn.setText("Upgrade now")
         elif sub_status in ("canceled", "past_due"):
@@ -339,10 +343,8 @@ class AccountPage(QWidget):
             self._billing_url = billing_url
         # cache the snapshot so the sidebar trial card / plan chip can render
         # without their own network calls
-        self.cfg.extra["cloud_sub_status"] = sub_status
-        self.cfg.extra["cloud_period_end"] = period_end
-        if billing_url:
-            self.cfg.extra["cloud_billing_url"] = billing_url
+        from .. import cloud_plan
+        cloud_plan.cache_me(self.cfg, data)
         self.cfg.save()
         if hasattr(self.shell, "refresh_plan_state"):
             self.shell.refresh_plan_state()
@@ -352,8 +354,9 @@ class AccountPage(QWidget):
         if cap > 0:
             pct = max(0, min(100, int(round(100 * used / cap))))
             self.usage_bar.setValue(pct)
+            period = "in your trial" if data.get("trial") else "this month"
             self.usage_lbl.setText(
-                f"Transcription this month: {self._fmt_hours(used)} of {self._fmt_hours(cap)} ({pct}%)"
+                f"Transcription {period}: {self._fmt_hours(used)} of {self._fmt_hours(cap)} ({pct}%)"
             )
         else:
             self.usage_bar.setValue(0)
@@ -373,6 +376,10 @@ class AccountPage(QWidget):
         return f"{int(round(seconds / 60))} min"
 
     def _manage_billing(self) -> None:
+        from .. import cloud_plan
+        if cloud_plan.trial(self.cfg) is not None and hasattr(self.shell, "trial_watcher"):
+            self.shell.trial_watcher.show_prompt(from_user=True)  # pick a plan, then checkout
+            return
         self._open_url(self._billing_url)
 
     # ---------- Cloud sync (cloud mode) ----------

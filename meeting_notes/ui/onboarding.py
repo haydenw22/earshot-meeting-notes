@@ -189,8 +189,9 @@ class OnboardingDialog(QDialog):
         t = QLabel("How do you want to run Earshot?")
         t.setObjectName("H2")
         lay.addWidget(t)
-        s = QLabel("Most people pick Earshot Plus — nothing to configure, first week free. "
-                   "Prefer to run your own AI? Self-hosting is free forever. Switch anytime.")
+        s = QLabel("Most people pick Earshot Plus: nothing to configure, and the first week is free "
+                   "with no card needed. Prefer to run your own AI? Self-hosting is free forever. "
+                   "Switch anytime.")
         s.setObjectName("Muted")
         s.setWordWrap(True)
         lay.addWidget(s)
@@ -219,7 +220,7 @@ class OnboardingDialog(QDialog):
         pt = QLabel("Earshot Plus")
         pt.setObjectName("H3")
         pcl.addWidget(pt)
-        pp = QLabel("Managed transcription + AI · 7-day free trial · $9/mo")
+        pp = QLabel("Managed transcription + AI · 7-day free trial, no card · then $9/mo")
         pp.setObjectName("Muted")
         pp.setWordWrap(True)
         pcl.addWidget(pp)
@@ -455,8 +456,9 @@ class OnboardingDialog(QDialog):
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(t)
         b = QLabel(
-            "Managed transcription and AI with no keys and no home server. Sign in to link "
-            "this computer, or skip for now and do it later from the Account page."
+            "Managed transcription and AI with no keys and no home server. Create a free "
+            "account to start your 7-day trial (no card needed), or sign in if you have one. "
+            "You can also skip for now and do it later from the Account page."
         )
         b.setObjectName("Muted")
         b.setWordWrap(True)

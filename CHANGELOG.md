@@ -4,6 +4,14 @@ All notable changes to Earshot are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] — 2026-11-10 · Try Earshot Plus free for 7 days, no card needed
+
+### Added
+
+- Earshot Plus now starts with a 7-day free trial and no card. Create an account (or sign in to one you made earlier) and managed transcription, notes and Ask Earshot work straight away, with 10 hours of transcription included in the trial.
+- A countdown in the sidebar shows how long your trial has left. As it ends, Earshot shows what it did for you during the trial (meetings recorded, hours captured, action items caught) and lets you keep Plus monthly or yearly in a couple of clicks. It never interrupts a recording, and "Not now" holds it off for a day.
+- If a meeting can't be transcribed because the trial is over or its hours are used up, you now get that choice right away instead of an error message. Your recordings, transcripts and notes always stay on your computer, whatever you decide.
+
 ## [0.37.0] — 2026-11-09 · Back-to-back meetings, and Mac updates without reinstalling
 
 ### Added

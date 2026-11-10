@@ -30,6 +30,9 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # /v1/transcribe hard cap (contract: ≤25 
 _SLUG_MESSAGES = {
     "auth_invalid": "Your Earshot Plus session has expired — sign in again from the Account page.",
     "sub_inactive": "Your Earshot Plus subscription isn't active — manage billing from the Account page.",
+    "trial_ended": "Your Earshot Plus free trial has ended. Subscribe to keep getting transcripts and notes.",
+    "trial_cap_reached": "You've used the transcription included in your Earshot Plus free trial. "
+                         "Subscribe to keep going.",
     "cap_reached": "You've reached this month's Earshot Plus transcription limit.",
     "too_large": "That audio is too large for Earshot Plus (max 25 MB per request).",
     "upstream_error": "Earshot Plus had a temporary problem transcribing that — please retry shortly.",
@@ -40,7 +43,24 @@ _MIME = {".wav": "audio/wav", ".flac": "audio/flac", ".ogg": "audio/ogg",
 
 
 class CloudError(RuntimeError):
-    """A user-facing error from the Earshot Plus proxy (already friendly)."""
+    """A user-facing error from the Earshot Plus proxy (already friendly).
+    `code` is the server's error slug when there was one (e.g. trial_ended)."""
+
+    def __init__(self, message: str = "", code: str = ""):
+        super().__init__(message)
+        self.code = code
+
+
+# Slugs that mean "subscribe to carry on", and the copy they surface as. The
+# processing workers hand the UI only str(error), so the UI recognises a
+# plan block by its message (is_plan_block) and offers the upgrade prompt
+# instead of a generic error box.
+PLAN_BLOCK_SLUGS = ("trial_ended", "trial_cap_reached", "sub_inactive")
+
+
+def is_plan_block(message: str) -> bool:
+    msg = (message or "").strip()
+    return any(msg.startswith(_SLUG_MESSAGES[s]) for s in PLAN_BLOCK_SLUGS)
 
 
 def _timeout(timeout: Optional[float]) -> httpx.Timeout:
@@ -82,7 +102,7 @@ def _friendly_body(body, status_code: int, *, upstream_message: str = "") -> Clo
             msg = f"Earshot Plus returned an error ({status_code})."
     elif slug == "cap_reached" and retry_after_days:
         msg = f"{msg} It resets in {int(retry_after_days)} day(s)."
-    return CloudError(msg)
+    return CloudError(msg, code=slug)
 
 
 def transcribe(

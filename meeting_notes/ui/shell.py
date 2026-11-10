@@ -159,6 +159,12 @@ class Shell(QMainWindow):
         self.call_watcher.call_ended.connect(self._on_call_ended)
         self.call_watcher.start()
 
+        # Earshot Plus free trial: keep the plan snapshot fresh and prompt to
+        # subscribe as the trial ends (never mid-recording).
+        from .trial_prompt import TrialWatcher
+        self.trial_watcher = TrialWatcher(self)
+        self.trial_watcher.start()
+
     # ---------- embedded-page accessors ----------
     # Account and Integrations live INSIDE Settings now (panes under the
     # ACCOUNT/SETTINGS nav rail) — these keep the old shell attributes working.
@@ -414,7 +420,7 @@ class Shell(QMainWindow):
         self.status_btn.setProperty("variant", "primary")
         self.status_btn.setMinimumHeight(34)
         self.status_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.status_btn.clicked.connect(lambda: self.show_settings("plans"))
+        self.status_btn.clicked.connect(self._on_status_btn)
         cl.addWidget(self.status_btn)
         return card
 
@@ -530,6 +536,8 @@ class Shell(QMainWindow):
         self.refresh_account_card()
         self.refresh_plan_state()
         self.sync.account_changed()  # sign-out stops syncing; sign-in resumes it
+        if hasattr(self, "trial_watcher"):
+            self.trial_watcher.check()  # a fresh sign-in: fetch this account's plan
 
     # ---------- sidebar collapse (full sidebar <-> icon rail) ----------
     _RAIL_W = 56
@@ -591,17 +599,22 @@ class Shell(QMainWindow):
     def refresh_plan_state(self) -> None:
         """Render the logo plan chip and the sidebar status card from the cached
         /v1/me snapshot (cfg.extra) — no network calls here."""
+        from .. import cloud_plan
         from ..util.dates import friendly_day
 
         cloud = self.cfg.account_mode == "cloud"
         status = (self.cfg.extra.get("cloud_sub_status") or "").strip()
         end = friendly_day(self.cfg.extra.get("cloud_period_end") or "")
+        trial = cloud_plan.trial(self.cfg)
+        self._status_opens_trial = trial is not None
 
         if cloud:
             trialing = status in ("trialing", "beta")
-            self.plan_chip.setText("Plus Trial" if trialing else "Plus")
+            ended = trial is not None and trial.over
+            self.plan_chip.setText("Trial ended" if ended else ("Plus Trial" if trialing else "Plus"))
+            fg, bg = ("danger", "danger_soft") if ended else ("primary", "primary_soft")
             self.plan_chip.setStyleSheet(
-                f"background:{self.theme.color('primary_soft')}; color:{self.theme.color('primary')};"
+                f"background:{self.theme.color(bg)}; color:{self.theme.color(fg)};"
                 f"border-radius:8px; padding:2px 8px; font-size:11px; font-weight:700;"
             )
             self.plan_chip.setVisible(True)
@@ -609,7 +622,20 @@ class Shell(QMainWindow):
             self.plan_chip.setVisible(False)
 
         show_card = False
-        if cloud and status in ("trialing", "beta"):
+        if trial is not None:
+            # the card-less free trial: count down, then ask to keep it
+            if trial.over:
+                self.status_title.setText("Your free trial has ended")
+                self.status_body.setText("Subscribe to keep getting notes from every meeting.")
+            elif trial.cap_reached:
+                self.status_title.setText("Trial hours used up")
+                self.status_body.setText("Subscribe to keep transcribing your meetings.")
+            else:
+                self.status_title.setText(f"Free trial ends {cloud_plan.ends_phrase(trial)}")
+                self.status_body.setText("Subscribe to keep transcripts and notes coming.")
+            self.status_btn.setText("Keep Earshot Plus")
+            show_card = True
+        elif cloud and status in ("trialing", "beta"):
             self.status_title.setText("Plus trial active")
             self.status_body.setText(
                 f"Your trial ends {end}. Upgrade to keep Plus features." if end
@@ -631,6 +657,12 @@ class Shell(QMainWindow):
             self.status_btn.setText("Renew")
             show_card = True
         self.status_card.setVisible(show_card)
+
+    def _on_status_btn(self) -> None:
+        if getattr(self, "_status_opens_trial", False) and hasattr(self, "trial_watcher"):
+            self.trial_watcher.show_prompt(from_user=True)
+        else:
+            self.show_settings("plans")
 
     @staticmethod
     def _headless() -> bool:

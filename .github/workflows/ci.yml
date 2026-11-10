@@ -57,6 +57,7 @@ jobs:
           python tests/test_updater.py
           python tests/test_updater_mac.py
           python tests/test_ghost_flash.py
+          python tests/test_trial_prompt.py
 
   test-macos:
     # Apple Silicon. QT_QPA_PLATFORM is cocoa (not offscreen): the offscreen
@@ -119,6 +120,7 @@ jobs:
           python tests/test_back_to_back.py
           python tests/test_code_update.py
           python tests/test_ghost_flash.py
+          python tests/test_trial_prompt.py
 
       - name: Build and validate the packaged macOS app
         run: |

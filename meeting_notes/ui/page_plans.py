@@ -111,8 +111,20 @@ class PlansPage(QWidget):
                     "transcription and AI for $9 a month.")
         from ..util.dates import friendly_day
 
+        from .. import cloud_plan
+
         status = (self.cfg.extra.get("cloud_sub_status") or "").strip()
         end = friendly_day(self.cfg.extra.get("cloud_period_end") or "")
+        trial = cloud_plan.trial(self.cfg)
+        if trial is not None and trial.over:
+            return ("Your free trial has ended",
+                    "Subscribe to keep managed transcription, notes and Ask Earshot. Your "
+                    "meetings and notes stay on this computer either way.")
+        if trial is not None:
+            when = f" until {end}" if end else ""
+            return ("Your free trial is on",
+                    f"Full Earshot Plus{when}, no card needed. Subscribe any time to keep it going "
+                    "after that.")
         if status in ("trialing", "beta"):
             when = f" It ends {end}." if end else ""
             return ("Your Earshot Plus trial is active",
@@ -230,7 +242,9 @@ class PlansPage(QWidget):
         # subscribed; the Free card explains how to switch back instead
         if name == "Earshot Plus":
             if self._cloud:
-                self.billing_btn = QPushButton("Manage billing")
+                from .. import cloud_plan
+                on_trial = cloud_plan.trial(self.cfg) is not None
+                self.billing_btn = QPushButton("Keep Earshot Plus" if on_trial else "Manage billing")
                 self.billing_btn.setProperty("variant", "primary")
                 self.billing_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 self.billing_btn.clicked.connect(self._manage_billing)
@@ -261,6 +275,10 @@ class PlansPage(QWidget):
         self.refresh()
 
     def _manage_billing(self) -> None:
+        from .. import cloud_plan
+        if cloud_plan.trial(self.cfg) is not None and hasattr(self.shell, "trial_watcher"):
+            self.shell.trial_watcher.show_prompt(from_user=True)  # pick a plan, then checkout
+            return
         url = (self.cfg.extra.get("cloud_billing_url") or "").strip() \
             or self.cfg.cloud_api_base.rstrip("/") + "/account"
         try:
@@ -294,11 +312,11 @@ class PlansPage(QWidget):
             self._on_me_failed("offline")
             return
         # cache for the sidebar status card / plan chip (no network there)
-        self.cfg.extra["cloud_sub_status"] = data.get("sub_status") or ""
-        self.cfg.extra["cloud_period_end"] = data.get("period_end") or ""
-        if data.get("billing_url"):
-            self.cfg.extra["cloud_billing_url"] = data.get("billing_url")
+        from .. import cloud_plan
+        cloud_plan.cache_me(self.cfg, data)
         self.cfg.save()
+        if hasattr(self, "billing_btn"):
+            self.billing_btn.setText("Keep Earshot Plus" if cloud_plan.trial(self.cfg) else "Manage billing")
 
         title, sub = self._banner_copy()
         self.banner_title.setText(title)
@@ -309,8 +327,9 @@ class PlansPage(QWidget):
         if cap > 0:
             pct = max(0, min(100, int(round(100 * used / cap))))
             self.usage_bar.setValue(pct)
+            period = "in your trial" if data.get("trial") else "this month"
             self.usage_lbl.setText(
-                f"Transcription this month: {self._fmt_hours(used)} of {self._fmt_hours(cap)} ({pct}%)"
+                f"Transcription {period}: {self._fmt_hours(used)} of {self._fmt_hours(cap)} ({pct}%)"
             )
         else:
             self.usage_bar.setValue(0)
