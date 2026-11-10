@@ -24,11 +24,12 @@ unless you choose one.
 ## Get it
 
 - **Windows:** [download the installer](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/EarshotSetup.exe)
-  (Windows 10/11, 64-bit). SmartScreen may warn — the installer is new and
-  unsigned; it's built from the source in this repo. *More info → Run anyway.*
+  (Windows 10/11, 64-bit). SmartScreen may warn because the installer is new and
+  unsigned; it's built from the source in this repo. *More info, then Run anyway.*
 - **Mac:** [download the disk image](https://github.com/haydenw22/earshot-meeting-notes/releases/latest/download/Earshot.dmg)
   (Apple Silicon, macOS 14.4 or newer), open it and drag Earshot to Applications.
-  Production Mac releases are Developer ID signed and notarized by Apple. The
+  The Mac app isn't Apple-signed yet, so macOS blocks the first launch once:
+  open *System Settings, Privacy & Security* and click *Open Anyway*. The
   first recording asks for Microphone and System Audio Recording permission.
 - A first-run **setup guide** walks you through the choice:
   - **Self-host — free forever.** Bring your own keys (Groq's free tier
@@ -203,9 +204,11 @@ sh packaging/mac/audiotap/build.sh
 sh packaging/mac/make_dmg.sh
 ```
 
-Tagged Mac releases fail unless Developer ID signing and notarization credentials
-are configured. CI verifies the bundle signature, Gatekeeper acceptance, stapled
-notarization ticket, architecture, metadata, DMG integrity and packaged launch.
+The release workflow signs and notarizes the Mac app when Developer ID
+credentials are configured, and then verifies the bundle signature, Gatekeeper
+acceptance, stapled notarization ticket, architecture, metadata, DMG integrity
+and packaged launch. Until those credentials exist, releases ship unsigned
+(the `ALLOW_UNSIGNED_MAC_RELEASE` repository variable allows it).
 
 <details>
 <summary><b>Project layout</b></summary>
